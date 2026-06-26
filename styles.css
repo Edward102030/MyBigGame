@@ -1,0 +1,656 @@
+/*
+  ═══════════════════════════════════════════════════════════════
+  REALM ENGINE — styles.css
+  ═══════════════════════════════════════════════════════════════
+  Design System: "Iron Parchment"
+  Palette:
+    --ink:        #1a1208   Deep charcoal-brown (primary text)
+    --parchment:  #2a1f0e   Dark parchment background
+    --amber:      #c8860a   Amber gold (accent, borders)
+    --rust:       #8b3a1a   Rust red (danger, enemy)
+    --slate:      #1e2d3d   Deep steel slate (UI panels)
+    --mist:       #3d4f5c   Muted steel (secondary UI)
+    --cream:      #e8d5a3   Parchment cream (text, highlights)
+    --glow:       #f5c842   Bright gold (active states)
+
+  Typography:
+    Display: Georgia, "Times New Roman" (system serif — no Google Fonts dep)
+    UI:      "Courier New", monospace (terminal crispness for numbers)
+    Body:    system-ui (legibility)
+
+  Signature element: The HUD top bar uses an aged-parchment gradient
+  with riveted metallic side borders, evoking illuminated manuscript
+  headers. All panels use a consistent inset box-shadow to simulate
+  embossed parchment depth.
+  ═══════════════════════════════════════════════════════════════
+*/
+
+/* ── Reset & Base ─────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+:root {
+  --ink:       #1a1208;
+  --parchment: #2a1f0e;
+  --amber:     #c8860a;
+  --rust:      #8b3a1a;
+  --slate:     #1e2d3d;
+  --mist:      #3d4f5c;
+  --cream:     #e8d5a3;
+  --glow:      #f5c842;
+  --panel-bg:  rgba(20, 14, 6, 0.88);
+  --border:    1px solid var(--amber);
+  --radius:    4px;
+  --hud-h-top: 64px;
+  --hud-h-bot: 72px;
+  --hud-h-prog: 28px;
+  --font-display: Georgia, "Times New Roman", serif;
+  --font-ui:      "Courier New", Courier, monospace;
+  --font-body:    system-ui, -apple-system, sans-serif;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  /* Disable iOS bounce scroll */
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: none;
+  touch-action: none;
+}
+
+/* ── Canvas ───────────────────────────────────────────────── */
+#realm-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: default;
+}
+
+/* ── HUD Root ─────────────────────────────────────────────── */
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  font-family: var(--font-ui);
+}
+
+/* ── Top Resource Bar ─────────────────────────────────────── */
+#hud-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--hud-h-top);
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  /* Aged parchment gradient with metallic depth */
+  background:
+    linear-gradient(
+      180deg,
+      rgba(30, 18, 4, 0.97) 0%,
+      rgba(42, 28, 10, 0.95) 60%,
+      rgba(20, 14, 6, 0.90) 100%
+    );
+  border-bottom: 2px solid var(--amber);
+  box-shadow:
+    0 1px 0 rgba(245, 200, 66, 0.15),
+    0 4px 20px rgba(0,0,0,0.7),
+    inset 0 -1px 0 rgba(200, 134, 10, 0.25);
+  padding: 0 16px;
+  pointer-events: auto;
+
+  /* Riveted border illusion via pseudo pseudo-element fallback
+     (done purely with repeating-linear-gradient) */
+  border-top: 3px solid #6a4a10;
+}
+
+.hud-resource {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 72px;
+}
+
+.res-icon {
+  font-size: 18px;
+  line-height: 1;
+  filter: drop-shadow(0 0 4px rgba(245, 200, 66, 0.5));
+}
+
+.res-label {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--amber);
+  opacity: 0.8;
+  text-transform: uppercase;
+}
+
+.res-value {
+  font-family: var(--font-ui);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--cream);
+  letter-spacing: 0.05em;
+  text-shadow: 0 0 8px rgba(245, 200, 66, 0.4);
+  min-width: 48px;
+  text-align: center;
+}
+
+/* ── Progress / Era Bar ───────────────────────────────────── */
+#hud-progress-bar {
+  position: absolute;
+  top: var(--hud-h-top);
+  left: 0;
+  right: 0;
+  height: var(--hud-h-prog);
+  background: rgba(15, 10, 3, 0.92);
+  border-bottom: 1px solid rgba(200, 134, 10, 0.4);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 10px;
+  pointer-events: none;
+}
+
+#hud-era-label {
+  font-family: var(--font-display);
+  font-size: 11px;
+  color: var(--amber);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  font-style: italic;
+  min-width: 90px;
+}
+
+#progress-track {
+  flex: 1;
+  height: 6px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 3px;
+  border: 1px solid rgba(200, 134, 10, 0.3);
+  overflow: hidden;
+}
+
+#progress-fill {
+  height: 100%;
+  width: 30%;
+  background: linear-gradient(90deg, #8b3a1a 0%, #c8860a 60%, #f5c842 100%);
+  border-radius: 3px;
+  transition: width 0.6s ease;
+  box-shadow: 0 0 6px rgba(245, 200, 66, 0.5);
+}
+
+#hud-level-label {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--cream);
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+/* ── Bottom Action Panel ──────────────────────────────────── */
+#hud-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--hud-h-bot);
+  background:
+    linear-gradient(
+      0deg,
+      rgba(20, 14, 4, 0.97) 0%,
+      rgba(30, 20, 8, 0.95) 100%
+    );
+  border-top: 2px solid var(--amber);
+  box-shadow:
+    0 -4px 20px rgba(0,0,0,0.7),
+    inset 0 1px 0 rgba(245, 200, 66, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 20px;
+  pointer-events: auto;
+  border-bottom: 3px solid #6a4a10;
+}
+
+/* ── Buttons ──────────────────────────────────────────────── */
+.hud-btn {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  padding: 10px 20px;
+  border-radius: var(--radius);
+  border: 1px solid var(--amber);
+  background: linear-gradient(
+    180deg,
+    rgba(200, 134, 10, 0.22) 0%,
+    rgba(100, 60, 5, 0.35) 100%
+  );
+  color: var(--glow);
+  cursor: pointer;
+  text-transform: uppercase;
+  box-shadow:
+    inset 0 1px 0 rgba(245, 200, 66, 0.18),
+    0 2px 8px rgba(0,0,0,0.5);
+  transition: background 0.15s, box-shadow 0.15s, transform 0.08s;
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  min-width: 80px;
+}
+
+.hud-btn:active {
+  background: linear-gradient(
+    180deg,
+    rgba(245, 200, 66, 0.3) 0%,
+    rgba(200, 134, 10, 0.45) 100%
+  );
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.4);
+}
+
+.hud-btn#btn-end-turn {
+  background: linear-gradient(
+    180deg,
+    rgba(139, 58, 26, 0.5) 0%,
+    rgba(80, 25, 8, 0.7) 100%
+  );
+  border-color: #c05020;
+  color: #ffb085;
+  min-width: 110px;
+}
+
+.hud-btn#btn-end-turn:active {
+  background: rgba(200, 80, 30, 0.5);
+}
+
+.hud-btn.secondary {
+  background: rgba(30, 45, 61, 0.6);
+  border-color: var(--mist);
+  color: var(--cream);
+  font-size: 12px;
+  min-width: 60px;
+}
+
+/* ── Tile Info Panel ──────────────────────────────────────── */
+#tile-info {
+  position: absolute;
+  bottom: calc(var(--hud-h-bot) + 12px);
+  left: 16px;
+  min-width: 200px;
+  background: var(--panel-bg);
+  border: var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px 12px 14px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(200,134,10,0.1);
+  pointer-events: auto;
+}
+
+#tile-info-name {
+  font-family: var(--font-display);
+  font-size: 15px;
+  color: var(--glow);
+  font-style: italic;
+  margin-bottom: 6px;
+}
+
+#tile-info-stats {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--cream);
+  opacity: 0.85;
+  line-height: 1.7;
+}
+
+#tile-info-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--amber);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  pointer-events: auto;
+}
+
+/* ── Build & Game Menu Overlays ───────────────────────────── */
+#build-menu,
+#game-menu {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, 90vw);
+  background: var(--panel-bg);
+  border: 2px solid var(--amber);
+  border-radius: 6px;
+  padding: 20px;
+  box-shadow: 0 8px 48px rgba(0,0,0,0.85), inset 0 0 0 1px rgba(200,134,10,0.1);
+  pointer-events: auto;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.menu-header {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-style: italic;
+  color: var(--glow);
+  text-align: center;
+  border-bottom: 1px solid rgba(200,134,10,0.4);
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  letter-spacing: 0.06em;
+}
+
+.menu-item {
+  width: 100%;
+}
+
+/* Build list items */
+.build-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(200,134,10,0.2);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s;
+  pointer-events: auto;
+}
+
+.build-item:hover,
+.build-item:active {
+  background: rgba(200, 134, 10, 0.15);
+}
+
+.build-item-name {
+  font-family: var(--font-display);
+  font-size: 14px;
+  color: var(--cream);
+  font-style: italic;
+}
+
+.build-item-cost {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--amber);
+  letter-spacing: 0.08em;
+}
+
+.build-item-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Toast Notification ───────────────────────────────────── */
+#toast {
+  position: absolute;
+  top: calc(var(--hud-h-top) + var(--hud-h-prog) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 7, 2, 0.93);
+  border: 1px solid var(--amber);
+  border-radius: var(--radius);
+  padding: 10px 20px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--cream);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  opacity: 1;
+  transition: opacity 0.4s ease;
+}
+
+#toast.hidden { opacity: 0; pointer-events: none; }
+
+/* ── Combat Log ───────────────────────────────────────────── */
+#combat-log {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(400px, 88vw);
+  background: var(--panel-bg);
+  border: 2px solid #c05020;
+  border-radius: 6px;
+  padding: 20px;
+  box-shadow: 0 8px 48px rgba(0,0,0,0.85);
+  pointer-events: auto;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+}
+
+#combat-log-body {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--cream);
+  line-height: 1.8;
+  overflow-y: auto;
+  max-height: 200px;
+}
+
+.combat-log-line { padding: 3px 0; }
+.combat-log-line.victory { color: var(--glow); }
+.combat-log-line.defeat  { color: #ff7060; }
+.combat-log-line.neutral { color: var(--mist); }
+
+/* ── Utility ──────────────────────────────────────────────── */
+.hidden {
+  display: none !important;
+}
+
+/* ── iPad Landscape Optimizations ────────────────────────── */
+@media screen and (orientation: landscape) {
+  :root {
+    --hud-h-top: 58px;
+    --hud-h-bot: 64px;
+    --hud-h-prog: 24px;
+  }
+
+  #hud-bottom {
+    gap: 16px;
+    padding: 0 32px;
+  }
+
+  .hud-btn {
+    padding: 10px 24px;
+    font-size: 12px;
+  }
+}
+
+/* iPad Pro 12.9" specifics */
+@media screen and (min-width: 1024px) and (orientation: landscape) {
+  .hud-resource {
+    min-width: 90px;
+  }
+
+  .res-value {
+    font-size: 19px;
+  }
+
+  #hud-bottom {
+    gap: 20px;
+  }
+
+  #build-menu, #game-menu {
+    width: 480px;
+  }
+}
+
+/* Safe area support for notched iPads */
+@supports (padding-top: env(safe-area-inset-top)) {
+  #hud-top {
+    padding-top: env(safe-area-inset-top);
+    height: calc(var(--hud-h-top) + env(safe-area-inset-top));
+  }
+  #hud-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(var(--hud-h-bot) + env(safe-area-inset-bottom));
+  }
+}
+
+/* Prevent text magnification on iOS input/button interaction */
+input, button, select, textarea {
+  font-size: 16px;
+}
+
+button {
+  font-size: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* ── Camera Controls (D-pad + Zoom + Reset) ───────────────── */
+#camera-controls {
+  position: absolute;
+  bottom: calc(var(--hud-h-bot) + 16px);
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  z-index: 11;
+}
+
+/* Zoom cluster (+ and -) */
+#zoom-cluster {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+/* D-pad grid */
+#dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 44px);
+  grid-template-rows:    repeat(3, 44px);
+  gap: 3px;
+}
+
+/* Base camera button shared style */
+.cam-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius);
+  border: 1px solid var(--amber);
+  background: linear-gradient(
+    160deg,
+    rgba(42, 30, 10, 0.92) 0%,
+    rgba(20, 14, 4, 0.96) 100%
+  );
+  color: var(--cream);
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(245, 200, 66, 0.15),
+    0 2px 8px rgba(0,0,0,0.6);
+  transition: background 0.1s, transform 0.07s;
+  -webkit-appearance: none;
+  appearance: none;
+  /* Prevent browser long-press menus */
+  -webkit-touch-callout: none;
+  touch-action: none;
+}
+
+.cam-btn:active {
+  background: linear-gradient(
+    160deg,
+    rgba(200, 134, 10, 0.35) 0%,
+    rgba(100, 60, 5, 0.5) 100%
+  );
+  transform: scale(0.93);
+  box-shadow: inset 0 1px 4px rgba(0,0,0,0.5);
+}
+
+/* D-pad centre cell is empty */
+.dpad-center {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+/* Reset camera button — amber accent */
+#btn-reset-cam {
+  width: 96px;   /* spans full dpad width roughly */
+  height: 34px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--amber);
+  border-color: rgba(200, 134, 10, 0.5);
+  background: rgba(15, 10, 3, 0.88);
+}
+
+/* Zoom buttons slightly taller */
+#btn-zoom-in,
+#btn-zoom-out {
+  width: 44px;
+  height: 48px;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--glow);
+}
+
+/* ── iPad landscape: nudge controls up a touch ───────────── */
+@media screen and (orientation: landscape) {
+  #camera-controls {
+    bottom: calc(var(--hud-h-bot) + 12px);
+    right: 20px;
+    gap: 5px;
+  }
+}
+
+/* iPad Pro — slightly larger hit targets */
+@media screen and (min-width: 1024px) {
+  .cam-btn {
+    width: 50px;
+    height: 50px;
+  }
+  #dpad {
+    grid-template-columns: repeat(3, 50px);
+    grid-template-rows:    repeat(3, 50px);
+  }
+  #btn-reset-cam {
+    width: 108px;
+  }
+}
