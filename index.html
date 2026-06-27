@@ -1,18 +1,4 @@
 <!DOCTYPE html>
-<!--
-  ═══════════════════════════════════════════════════════════════
-  REALM ENGINE — index.html
-  ═══════════════════════════════════════════════════════════════
-  Integration Notes:
-  · Loads styles.css (visual layer) then game.js (engine core)
-  · game.js attaches to window.REALM and reads window.SHORTCUTS_SAVE
-  · Apple Shortcuts injection: set window.SHORTCUTS_SAVE = "<json>"
-    before this page loads, or call window.REALM.loadSave("<json>")
-    at any time after DOMContentLoaded fires.
-  · All HUD element IDs are referenced in game.js via REALM.hud.*
-  · Canvas ID "realm-canvas" must not be renamed.
-  ═══════════════════════════════════════════════════════════════
--->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -21,16 +7,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Realm Engine</title>
   <link rel="stylesheet" href="styles.css" />
-
-  <!--
-    ── Apple Shortcuts Save-State Hook ──────────────────────────
-    Shortcuts can inject a save JSON string before page load by
-    prepending a <script> tag:
-      window.SHORTCUTS_SAVE = '{"turn":5,"tiles":[...]}';
-    The engine checks this on init and calls loadSave() if present.
-  -->
   <script>
-    // Fallback: read save from localStorage if Shortcuts didn't inject it
     (function () {
       if (typeof window.SHORTCUTS_SAVE === 'undefined') {
         var stored = localStorage.getItem('realm_save');
@@ -39,99 +16,193 @@
     })();
   </script>
 </head>
-
 <body>
 
-  <!-- ── Canvas Viewport ─────────────────────────────────────── -->
+  <!-- ═══════════════════════════════════════════
+       HOME SCREEN — shown first, hidden on play
+  ════════════════════════════════════════════ -->
+  <div id="home-screen">
+    <div id="home-bg-canvas-wrap">
+      <canvas id="home-bg"></canvas>
+    </div>
+
+    <div id="home-content">
+      <div id="home-crest">⚔</div>
+      <h1 id="home-title">REALM<span>ENGINE</span></h1>
+      <p id="home-subtitle">A Grand Strategy of Conquest & Empire</p>
+
+      <div id="home-faction-preview">
+        <div class="faction-chip player-chip">
+          <span class="faction-dot" style="background:#4a90d9"></span>
+          <span>You — <b>The Blue Kingdom</b></span>
+        </div>
+        <div class="faction-chip">
+          <span class="faction-dot" style="background:#d94a4a"></span>
+          <span>Crimson Empire  · AI</span>
+        </div>
+        <div class="faction-chip">
+          <span class="faction-dot" style="background:#4ad95c"></span>
+          <span>Verdant League  · AI</span>
+        </div>
+        <div class="faction-chip">
+          <span class="faction-dot" style="background:#d9c44a"></span>
+          <span>Amber Sultanate · AI</span>
+        </div>
+        <div class="faction-chip">
+          <span class="faction-dot" style="background:#a04ad9"></span>
+          <span>Violet Conclave · AI</span>
+        </div>
+      </div>
+
+      <div id="home-buttons">
+        <button id="btn-new-game"  class="home-btn primary"  onclick="window.REALM && window.REALM.startNewGame()">⚔ New Game</button>
+        <button id="btn-load-game" class="home-btn secondary" onclick="window.REALM && window.REALM.startLoadGame()">📂 Continue</button>
+      </div>
+
+      <div id="home-hint">Tap a tile to select · Drag to pan · Pinch to zoom</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       GAME CANVAS
+  ════════════════════════════════════════════ -->
   <canvas id="realm-canvas" aria-label="Realm isometric game world"></canvas>
 
-  <!-- ── HUD Overlay ────────────────────────────────────────── -->
-  <div id="hud" aria-label="Heads-up display">
+  <!-- ═══════════════════════════════════════════
+       HUD — hidden until game starts
+  ════════════════════════════════════════════ -->
+  <div id="hud" class="hidden" aria-label="Heads-up display">
 
     <!-- Top resource bar -->
     <div id="hud-top">
-      <div class="hud-resource" id="res-gold">
+      <!-- Player badge -->
+      <div id="player-badge">
+        <span class="player-dot"></span>
+        <span id="player-name-label">Blue Kingdom</span>
+      </div>
+      <div class="hud-resource">
         <span class="res-icon">⚜</span>
         <span class="res-label">GOLD</span>
         <span class="res-value" id="val-gold">0</span>
       </div>
-      <div class="hud-resource" id="res-food">
+      <div class="hud-resource">
         <span class="res-icon">🌾</span>
         <span class="res-label">FOOD</span>
         <span class="res-value" id="val-food">0</span>
       </div>
-      <div class="hud-resource" id="res-prod">
+      <div class="hud-resource">
         <span class="res-icon">⚒</span>
         <span class="res-label">PROD</span>
         <span class="res-value" id="val-prod">0</span>
       </div>
-      <div class="hud-resource" id="res-turn">
+      <div class="hud-resource">
         <span class="res-icon">⏳</span>
         <span class="res-label">TURN</span>
         <span class="res-value" id="val-turn">1</span>
       </div>
     </div>
 
-    <!-- Level & era progress bar -->
+    <!-- Era progress bar -->
     <div id="hud-progress-bar">
       <div id="hud-era-label">Age of Iron</div>
-      <div id="progress-track">
-        <div id="progress-fill"></div>
-      </div>
+      <div id="progress-track"><div id="progress-fill"></div></div>
       <div id="hud-level-label">Lvl <span id="val-level">1</span></div>
     </div>
 
-    <!-- Bottom action panel -->
+    <!-- Bottom action bar -->
     <div id="hud-bottom">
-      <button class="hud-btn" id="btn-end-turn" onclick="window.REALM && window.REALM.endTurn()">
-        END TURN
+      <button class="hud-btn end-turn-btn" id="btn-end-turn" onclick="window.REALM && window.REALM.endTurn()">
+        ⚔ END TURN
       </button>
       <button class="hud-btn" id="btn-build" onclick="window.REALM && window.REALM.openBuildMenu()">
-        BUILD
+        🏗 BUILD
       </button>
       <button class="hud-btn secondary" id="btn-save" onclick="window.REALM && window.REALM.saveGame()">
-        SAVE
+        💾
       </button>
       <button class="hud-btn secondary" id="btn-menu" onclick="window.REALM && window.REALM.toggleMenu()">
         ☰
       </button>
     </div>
 
-    <!-- Tile info tooltip -->
+    <!-- Faction legend (always visible, bottom-left) -->
+    <div id="faction-legend">
+      <div class="legend-row player-legend">
+        <span class="legend-dot" style="background:#4a90d9"></span>
+        <span class="legend-name">You · Blue Kingdom</span>
+      </div>
+      <div class="legend-row">
+        <span class="legend-dot" style="background:#d94a4a"></span>
+        <span class="legend-name">Crimson Empire</span>
+      </div>
+      <div class="legend-row">
+        <span class="legend-dot" style="background:#4ad95c"></span>
+        <span class="legend-name">Verdant League</span>
+      </div>
+      <div class="legend-row">
+        <span class="legend-dot" style="background:#d9c44a"></span>
+        <span class="legend-name">Amber Sultanate</span>
+      </div>
+      <div class="legend-row">
+        <span class="legend-dot" style="background:#a04ad9"></span>
+        <span class="legend-name">Violet Conclave</span>
+      </div>
+    </div>
+
+    <!-- Camera controls -->
+    <div id="camera-controls">
+      <div id="zoom-cluster">
+        <button class="cam-btn" id="btn-zoom-in">+</button>
+        <button class="cam-btn" id="btn-zoom-out">−</button>
+      </div>
+      <div id="dpad">
+        <div></div>
+        <button class="cam-btn" id="dpad-up">▲</button>
+        <div></div>
+        <button class="cam-btn" id="dpad-left">◀</button>
+        <div class="dpad-center"></div>
+        <button class="cam-btn" id="dpad-right">▶</button>
+        <div></div>
+        <button class="cam-btn" id="dpad-down">▼</button>
+        <div></div>
+      </div>
+      <button class="cam-btn" id="btn-reset-cam">⌖ RESET</button>
+    </div>
+
+    <!-- Tile info panel -->
     <div id="tile-info" class="hidden">
       <div id="tile-info-name">—</div>
       <div id="tile-info-stats">—</div>
       <button id="tile-info-close" onclick="document.getElementById('tile-info').classList.add('hidden')">✕</button>
     </div>
 
-    <!-- Build menu overlay -->
+    <!-- Build menu -->
     <div id="build-menu" class="hidden">
-      <div class="menu-header">Construct Building</div>
-      <div id="build-list"><!-- populated by game.js --></div>
+      <div class="menu-header">⚒ Construct</div>
+      <div id="build-list"></div>
       <button class="hud-btn secondary" onclick="window.REALM && window.REALM.closeBuildMenu()">Cancel</button>
     </div>
 
-    <!-- Game menu overlay -->
+    <!-- Game menu -->
     <div id="game-menu" class="hidden">
-      <div class="menu-header">Menu</div>
-      <button class="hud-btn menu-item" onclick="window.REALM && window.REALM.saveGame()">Save Game</button>
-      <button class="hud-btn menu-item" onclick="window.REALM && window.REALM.newGame()">New Game</button>
-      <button class="hud-btn secondary menu-item" onclick="window.REALM && window.REALM.toggleMenu()">Close</button>
+      <div class="menu-header">☰ Menu</div>
+      <button class="hud-btn menu-item" onclick="window.REALM && window.REALM.saveGame()">💾 Save Game</button>
+      <button class="hud-btn menu-item" onclick="window.REALM && window.REALM.goHome()">🏠 Home Screen</button>
+      <button class="hud-btn secondary menu-item" onclick="window.REALM && window.REALM.toggleMenu()">✕ Close</button>
     </div>
 
-    <!-- Notification toast -->
+    <!-- Toast notification -->
     <div id="toast" class="hidden"></div>
 
     <!-- Combat log -->
     <div id="combat-log" class="hidden">
-      <div class="menu-header">Combat Report</div>
+      <div class="menu-header">⚔ Combat Report</div>
       <div id="combat-log-body"></div>
       <button class="hud-btn secondary" onclick="document.getElementById('combat-log').classList.add('hidden')">Dismiss</button>
     </div>
 
-  </div><!-- /#hud -->
+  </div>
 
   <script src="game.js"></script>
-
 </body>
 </html>
