@@ -18,8 +18,8 @@
 ══════════════════════════════════════════════ */
 const TOTAL_DAYS = 90;   // 3 in-game years
 const MAX_STAT   = 200;
-const SAVE_KEY   = 'tinykingdom_v3';
-const META_KEY   = 'tinykingdom_meta';
+const SAVE_KEY   = 'tinykingdom_v5';
+const META_KEY   = 'tinykingdom_meta_v5';
 
 const SEASONS = [
   {name:'Spring',icon:'🌱',color:'#4a8a2a',days:[1,22]},
@@ -1528,6 +1528,16 @@ function wireButtons(){
   const on=(id,fn)=>{const el=document.getElementById(id);if(el)el.addEventListener('click',fn);};
 
   on('btn-new',      startNewGame);
+  on('btn-clear',()=>{
+    // Wipe every tinykingdom key from localStorage
+    try{
+      Object.keys(localStorage)
+        .filter(k=>k.startsWith('tinykingdom'))
+        .forEach(k=>localStorage.removeItem(k));
+    }catch(e){}
+    toast('🗑 All saved data cleared. Start a New Kingdom!');
+    loadHomeScreen();
+  });
   on('btn-continue', continueGame);
   on('btn-next-event',advanceDay);
   on('btn-skip',()=>{
@@ -1560,22 +1570,28 @@ function wireButtons(){
    BOOT — always show home screen first
 ══════════════════════════════════════════════ */
 function init(){
-  // Clear any completed or broken saves immediately on load
+  // Nuclear clear — wipe ALL tinykingdom saves from any version
   try{
-    const raw=localStorage.getItem(SAVE_KEY);
-    if(raw){
-      const d=JSON.parse(raw);
-      if(!d||typeof d.day!=='number'||d.day>=TOTAL_DAYS||d.day<1){
-        localStorage.removeItem(SAVE_KEY);
+    const keys=Object.keys(localStorage).filter(k=>k.startsWith('tinykingdom'));
+    keys.forEach(k=>{
+      // Keep only the current version meta key — delete everything else
+      if(k!==META_KEY){
+        try{
+          const d=JSON.parse(localStorage.getItem(k));
+          // If it looks like a completed save, nuke it
+          if(!d||!d.day||d.day>=TOTAL_DAYS){
+            localStorage.removeItem(k);
+          }
+        }catch(e){ localStorage.removeItem(k); }
       }
-    }
-  }catch(e){localStorage.removeItem(SAVE_KEY);}
+    });
+  }catch(e){}
 
   wireButtons();
   loadHomeScreen();
   HomeAnim.init();
 
-  // Make sure all screens are in correct initial state
+  // ALWAYS start on home screen — never skip to game/victory
   document.getElementById('game').classList.add('hidden');
   document.getElementById('gameover').classList.add('hidden');
   document.getElementById('victory').classList.add('hidden');
