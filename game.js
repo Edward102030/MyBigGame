@@ -1,10 +1,15 @@
+cat > /mnt/user-data/outputs/game.js << 'JSEOF'
 /**
- * REALM CONQUEST — game.js
- * WebGL renderer, 50-degree isometric camera,
- * 100+ triangles per hex, land battles,
- * Main Tower HP (lose if destroyed),
- * 2 starting groups of 10 troops each,
- * Split groups, buildings, upgrades with 2-turn delivery
+ * TINY KINGDOM — game.js
+ * The most addictive browser strategy game possible.
+ * Core addiction loops:
+ * 1. Daily streak system
+ * 2. Cliffhanger events (consequences revealed next session)
+ * 3. Permanent consequences (real stakes)
+ * 4. Visual kingdom growth (satisfying progress)
+ * 5. Achievement dopamine hits
+ * 6. Near-miss mechanics (almost lost!)
+ * 7. Narrative investment (named characters, stories)
  */
 (function(){
 'use strict';
@@ -12,790 +17,890 @@
 /* ══════════════════════════════════════════════
    CONSTANTS
 ══════════════════════════════════════════════ */
-const HEX_SIZE   = 40;      // hex radius in world units
-const GRID_W     = 48;
-const GRID_H     = 48;
-const CAM_ANGLE  = 50;      // degrees tilt
-const RAD        = Math.PI/180;
-const FPS        = 60;
+const TOTAL_DAYS = 90;   // 3 in-game years
+const MAX_STAT   = 200;
+const SAVE_KEY   = 'tinykingdom_v3';
+const META_KEY   = 'tinykingdom_meta';
 
-// Camera iso projection constants for 50-degree tilt
-// IsoX = (x - y) * cos(30°) * HEX_SIZE
-// IsoY = (x + y) * sin(30°) * HEX_SIZE - z * HEIGHT_MOD
-// then vertically squashed by sin(50°) ≈ 0.766
-const COS30 = Math.cos(30*RAD); // 0.866
-const SIN30 = Math.sin(30*RAD); // 0.5
-const VTILT = Math.sin(CAM_ANGLE*RAD); // 0.766 — 50-degree tilt compression
+const SEASONS = [
+  {name:'Spring',icon:'🌱',color:'#4a8a2a',days:[1,22]},
+  {name:'Summer',icon:'☀',color:'#c8860a',days:[23,45]},
+  {name:'Autumn',icon:'🍂',color:'#8a3a0a',days:[46,67]},
+  {name:'Winter',icon:'❄',color:'#3a5a7a',days:[68,90]},
+];
 
-// Terrain types (land only as requested)
-const T = {PLAINS:0,FOREST:1,HILLS:2,MOUNTAIN:3,DESERT:4,SNOW:5,MARSH:6};
-const TNAME = ['Plains','Forest','Hills','Mountain','Desert','Snow','Marsh'];
-const TMOV  = [1.0,   0.7,   0.6,   0.4,    0.85,  0.65,  0.5 ]; // movement cost
-const TDEF  = [0,     15,    20,     35,      5,     10,    10  ]; // defence bonus %
-
-// Building types
-const B = {NONE:0,MAIN_TOWER:1,HOUSE:2,BARRACKS:3,FORGE:4,ELITE_FORGE:5,WATCH_TOWER:6,WALLS:7};
-const BNAME = ['','Main Tower','House','Barracks','Forge','Elite Forge','Watch Tower','Walls'];
-
-// Faction colours — index 0 = player
-const FC = ['#4a90d9','#d94a4a','#4ad95c','#d9c44a'];
-const FN_DEFAULT = ['Blue Kingdom','Crimson Empire','Verdant League','Amber Sultanate'];
-
-// AI faction names pool
-const AI_NAMES = [
-  'Crimson Empire','Iron Veil Dominion','Verdant Confederacy',
-  'Amber Sultanate','Shadow Reach','The Obsidian Crown','Steel Covenant',
+const KINGDOM_NAMES=[
+  'Ironveil','Ashmore','Crestholm','Dawnshire','Eldergate',
+  'Frostmere','Goldenmarch','Halverton','Ironpeak','Jadehaven',
+  'Kestrelford','Lionsmere','Moonvale','Northgate','Oakhaven',
 ];
 
 /* ══════════════════════════════════════════════
-   WORLD STATE
+   GAME STATE
 ══════════════════════════════════════════════ */
-const World = {
-  grid:[],      // flat array of hex cells
-  groups:[],    // all troop groups (all factions)
-  buildings:[], // placed buildings
-  deliveries:[], // pending upgrade/equipment deliveries
-  turn:1,
-  factions:[],  // {name, color, isPlayer, alive}
-  playerFaction:0,
-  towerHP:500,
-  towerMaxHP:500,
-  seed:0,
-
-  idx(q,r){return r*GRID_W+q;},
-  get(q,r){
-    if(q<0||r<0||q>=GRID_W||r>=GRID_H)return null;
-    return this.grid[this.idx(q,r)];
-  },
-
-  // Noise-based terrain generation
-  generate(seed){
-    this.seed=seed||Math.floor(Math.random()*999999);
-    this.grid=[];
-    const s=this.seed;
-    function n(x,y){
-      return(Math.sin(x*.37+s*.001)*Math.cos(y*.31+s*.0013)+
-             Math.sin(x*.71+s*.0007)*.6+
-             Math.cos(y*.19+s*.0021)*.4+2)/4;
-    }
-    for(let r=0;r<GRID_H;r++){
-      for(let q=0;q<GRID_W;q++){
-        const h=n(q,r);
-        const m=n(q*1.9,r*1.9);
-        let t,z=0;
-        if(h<.18){t=T.MARSH;z=0;}
-        else if(h<.32){t=T.PLAINS;z=0;}
-        else if(h<.50){t=m>.55?T.FOREST:T.PLAINS;z=1;}
-        else if(h<.66){t=T.HILLS;z=1;}
-        else if(h<.80){t=T.MOUNTAIN;z=2;}
-        else{t=T.SNOW;z=3;}
-        if(q/GRID_W>.6&&r/GRID_H<.4&&h>.2&&h<.6){t=T.DESERT;z=0;}
-        this.grid.push({q,r,t,z,building:B.NONE,faction:-1,hp:0});
-      }
-    }
-  },
-
-  // Place player's Main Tower near center
-  placeMainTower(){
-    const cq=Math.floor(GRID_W/2), cr=Math.floor(GRID_H/2);
-    for(let rad=0;rad<10;rad++){
-      for(let dr=-rad;dr<=rad;dr++){
-        for(let dq=-rad;dq<=rad;dq++){
-          const cell=this.get(cq+dq,cr+dr);
-          if(cell&&cell.t!==T.MOUNTAIN&&cell.t!==T.MARSH){
-            cell.t=T.PLAINS;cell.z=0;
-            cell.building=B.MAIN_TOWER;cell.faction=this.playerFaction;
-            cell.hp=this.towerMaxHP;
-            this.buildings.push({q:cq+dq,r:cr+dr,type:B.MAIN_TOWER,faction:this.playerFaction,hp:this.towerMaxHP,maxHP:this.towerMaxHP});
-            return{q:cq+dq,r:cr+dr};
-          }
-        }
-      }
-    }
-    return{q:cq,r:cr};
-  },
-
-  // Place AI capitals far from player
-  placeAICapitals(){
-    const corners=[
-      {q:3,r:3},{q:GRID_W-4,r:3},
-      {q:3,r:GRID_H-4},{q:GRID_W-4,r:GRID_H-4},
-    ];
-    for(let i=1;i<this.factions.length;i++){
-      const c=corners[(i-1)%corners.length];
-      for(let rad=0;rad<8;rad++){
-        let placed=false;
-        for(let dr=-rad;dr<=rad&&!placed;dr++){
-          for(let dq=-rad;dq<=rad&&!placed;dq++){
-            const cell=this.get(c.q+dq,c.r+dr);
-            if(cell&&cell.t!==T.MOUNTAIN&&cell.t!==T.MARSH&&cell.building===B.NONE){
-              cell.t=T.PLAINS;cell.z=0;
-              cell.building=B.MAIN_TOWER;cell.faction=i;
-              cell.hp=400;
-              this.buildings.push({q:c.q+dq,r:c.r+dr,type:B.MAIN_TOWER,faction:i,hp:400,maxHP:400});
-              placed=true;
-            }
-          }
-        }
-      }
-    }
-  },
+const G = {
+  // Resources (0-200)
+  gold:100, food:80, army:20, happy:75, pop:50,
+  // Kingdom
+  day:1, score:0,
+  name:'',
+  buildings:[], // {id, name, icon, effect}
+  achievements:[], // unlocked achievement ids
+  events_seen:[], // event ids seen this run
+  pending_event:null, // event queued for next session (cliffhanger)
+  history:[], // {day, event, choice, outcome}
+  // Meta (persists across runs)
+  streak:0,
+  last_played:'',
+  best_score:0,
+  total_runs:0,
+  all_achievements:[],
 };
 
 /* ══════════════════════════════════════════════
-   GROUP SYSTEM
+   BUILDINGS
 ══════════════════════════════════════════════ */
-let gidCounter=0;
-function makeGroup(faction,q,r,troops,name){
-  return{
-    id:gidCounter++,
-    faction,q,r,troops,
-    maxTroops:troops,
-    name:name||`Group ${String.fromCharCode(65+gidCounter%26)}`,
-    weapon:'Sword',armor:'Leather',
-    morale:100,
-    moved:false,
-    attacked:false,
-    alive:true,
-  };
-}
-
-/* ══════════════════════════════════════════════
-   CAMERA
-══════════════════════════════════════════════ */
-const Cam={
-  x:0,y:0,       // pan offset in world units
-  zoom:1,
-  minZ:.25,maxZ:3,
-
-  // Convert hex grid (q,r,elev) → screen pixel
-  // 50-degree isometric projection:
-  // IsoX = (q - r) * COS30 * HEX_SIZE
-  // IsoY = ((q + r) * SIN30 * HEX_SIZE - elev*20) * VTILT
-  hexToWorld(q,r,elev){
-    elev=elev||0;
-    const wx=(q-r)*COS30*HEX_SIZE;
-    const wy=((q+r)*SIN30*HEX_SIZE - elev*22)*VTILT;
-    return{wx,wy};
-  },
-  worldToScreen(wx,wy){
-    const cx=GAME.canvas.width/2, cy=GAME.canvas.height/2;
-    return{
-      sx:(wx+this.x)*this.zoom+cx,
-      sy:(wy+this.y)*this.zoom+cy,
-    };
-  },
-  hexToScreen(q,r,elev){
-    const{wx,wy}=this.hexToWorld(q,r,elev);
-    return this.worldToScreen(wx,wy);
-  },
-  screenToHex(sx,sy){
-    const cx=GAME.canvas.width/2,cy=GAME.canvas.height/2;
-    const wx=(sx-cx)/this.zoom - this.x;
-    const wy=(sy-cy)/this.zoom - this.y;
-    // Invert iso projection (approximate, ignore elev)
-    const wyU=wy/VTILT;
-    const q=(wx/(COS30*HEX_SIZE) + wyU/(SIN30*HEX_SIZE))/2;
-    const r=(wyU/(SIN30*HEX_SIZE) - wx/(COS30*HEX_SIZE))/2;
-    return{q:Math.round(q),r:Math.round(r)};
-  },
-  visible(sx,sy){
-    const pad=HEX_SIZE*this.zoom*3;
-    return sx>-pad&&sx<GAME.canvas.width+pad&&sy>-pad&&sy<GAME.canvas.height+pad;
-  },
-  centreOn(q,r,elev){
-    const{wx,wy}=this.hexToWorld(q,r,elev||0);
-    this.x=-wx; this.y=-wy;
-  },
+const BUILDINGS = {
+  farm:       {id:'farm',       name:'Farm',         icon:'🌾', desc:'+5 Food/day'},
+  market:     {id:'market',     name:'Market',       icon:'🏪', desc:'+8 Gold/day'},
+  barracks:   {id:'barracks',   name:'Barracks',     icon:'⚔',  desc:'+6 Army/day'},
+  tavern:     {id:'tavern',     name:'Tavern',       icon:'🍺', desc:'+5 Happiness/day'},
+  library:    {id:'library',    name:'Library',      icon:'📚', desc:'Unlocks advanced events'},
+  cathedral:  {id:'cathedral',  name:'Cathedral',    icon:'⛪', desc:'+8 Happiness, reduces unrest'},
+  forge:      {id:'forge',      name:'Forge',        icon:'🔨', desc:'+10 Army/day'},
+  granary:    {id:'granary',    name:'Granary',      icon:'🌽', desc:'Prevents famine'},
+  treasury:   {id:'treasury',   name:'Treasury',     icon:'💰', desc:'Gold cap +100'},
+  walls:      {id:'walls',      name:'City Walls',   icon:'🧱', desc:'+30 Army defence'},
+  harbour:    {id:'harbour',    name:'Harbour',      icon:'⚓', desc:'+12 Gold/day, opens trade'},
+  palace:     {id:'palace',     name:'Palace',       icon:'🏰', desc:'+15 all stats, prestige'},
 };
 
 /* ══════════════════════════════════════════════
-   WEBGL RENDERER
-   Each hex = triangle fan from center point
-   Subdivisions = 12 → 12 triangles per hex face
-   + cliff sides → total ~100+ triangles per hex
+   ACHIEVEMENTS
 ══════════════════════════════════════════════ */
-const GL={
-  gl:null,
-  prog:null,
-  buf:null,
-  // Vertex + fragment shaders
-  VS:`
-    attribute vec2 aPos;
-    attribute vec3 aColor;
-    attribute float aAlpha;
-    uniform vec2 uResolution;
-    varying vec3 vColor;
-    varying float vAlpha;
-    void main(){
-      vec2 clip = (aPos/uResolution)*2.0 - 1.0;
-      gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
-      vColor = aColor;
-      vAlpha = aAlpha;
-    }
-  `,
-  FS:`
-    precision mediump float;
-    varying vec3 vColor;
-    varying float vAlpha;
-    void main(){
-      gl_FragColor = vec4(vColor, vAlpha);
-    }
-  `,
+const ACHIEVEMENTS = [
+  {id:'first_win',    icon:'👑', name:'First Legend',     desc:'Complete your first campaign',   check:()=>G.day>=TOTAL_DAYS},
+  {id:'golden_age',   icon:'⚜', name:'Golden Age',       desc:'Reach 150 gold',                check:()=>G.gold>=150},
+  {id:'iron_fist',    icon:'⚔', name:'Iron Fist',        desc:'Reach 100 army strength',       check:()=>G.army>=100},
+  {id:'beloved',      icon:'❤', name:'Beloved Ruler',    desc:'Keep happiness above 90 for 10 days', check:()=>false}, // tracked manually
+  {id:'survivor',     icon:'💪', name:'Survivor',        desc:'Recover from near-bankruptcy',  check:()=>false},
+  {id:'builder',      icon:'🏗', name:'Master Builder',  desc:'Construct 5 buildings',         check:()=>G.buildings.length>=5},
+  {id:'scholar',      icon:'📚', name:'Scholar King',    desc:'Build the Library',             check:()=>G.buildings.some(b=>b.id==='library')},
+  {id:'populist',     icon:'👥', name:'People\'s King',  desc:'Reach 120 population',          check:()=>G.pop>=120},
+  {id:'centurion',    icon:'🏛', name:'Centurion',       desc:'Survive to day 30',             check:()=>G.day>=30},
+  {id:'half_way',     icon:'🌗', name:'Halfway There',   desc:'Survive to day 45',             check:()=>G.day>=45},
+  {id:'palace_built', icon:'🏰', name:'Imperial Palace', desc:'Build the Palace',              check:()=>G.buildings.some(b=>b.id==='palace')},
+  {id:'rich',         icon:'💎', name:'Treasury Full',   desc:'Reach 180 gold',                check:()=>G.gold>=180},
+  {id:'warmonger',    icon:'🗡', name:'Warmonger',       desc:'Reach 150 army strength',       check:()=>G.army>=150},
+  {id:'peacekeeper',  icon:'🕊', name:'Peacekeeper',    desc:'Complete campaign without war',  check:()=>false},
+  {id:'comeback',     icon:'🔄', name:'Great Comeback',  desc:'Survive with gold below 10',    check:()=>false},
+];
+
+/* ══════════════════════════════════════════════
+   THE EVENT DATABASE
+   120+ unique events with branching choices
+   and real consequences
+══════════════════════════════════════════════ */
+const EVENTS = [
+// ─────────────────────────────────────────────
+// SPRING EVENTS (days 1-22)
+// ─────────────────────────────────────────────
+{
+  id:'spring_merchant',season:0,minDay:2,maxDay:10,weight:10,
+  icon:'🛒',title:'A Wandering Merchant',
+  body:'A merchant caravan has arrived at your gates, carrying silks, spices, and rare goods from distant lands. They offer you a trade — but their prices seem steep.',
+  choices:[
+    {text:'Trade generously',effect:'Gold -20, Happiness +15, Pop +5',
+     resolve:(g)=>{g.gold-=20;g.happy+=15;g.pop+=5;},
+     outcome:'The merchants spread word of your generosity. Your people celebrate in the streets!',icon:'🎉',good:true},
+    {text:'Negotiate hard',effect:'Gold -8, Pop +3',
+     resolve:(g)=>{g.gold-=8;g.pop+=3;},
+     outcome:'You drive a shrewd bargain. The merchants grumble but accept. You got the better deal.',icon:'🤝',good:true},
+    {text:'Turn them away',effect:'Nothing changes',
+     resolve:(g)=>{},
+     outcome:'The merchants leave. Your treasury is intact, but your people seem disappointed.',icon:'😐'},
+  ]
+},
+{
+  id:'spring_flood',season:0,minDay:1,maxDay:20,weight:8,
+  icon:'🌊',title:'The River Floods',
+  body:'Melting snow has swollen the river beyond its banks. Farmland is submerged. Your people look to you for guidance.',
+  choices:[
+    {text:'Build emergency levees (Cost: 30 Gold)',effect:'Gold -30, Food +20, Pop +8',
+     resolve:(g)=>{g.gold-=30;g.food+=20;g.pop+=8;},
+     outcome:'The levees hold! Farmers salvage their crops. Your decisive action saves the harvest.',icon:'💪',good:true},
+    {text:'Pray for the waters to recede',effect:'Food -15 (risky)',risk:'25% chance Food -30',
+     resolve:(g)=>{g.food-=15;if(Math.random()<.25)g.food-=30;},
+     outcome:'The river eventually subsides. Some crops are lost, but the kingdom endures.',icon:'🙏'},
+    {text:'Relocate farms to higher ground',effect:'Gold -15, Pop -5, Food +10 (permanent)',
+     resolve:(g)=>{g.gold-=15;g.pop-=5;g.food+=10;},
+     outcome:'The move is costly, but your farms are now safer for generations to come.',icon:'🏔',good:true},
+  ]
+},
+{
+  id:'spring_twins',season:0,minDay:3,maxDay:15,weight:6,
+  icon:'👶',title:'Royal Twins Born',
+  body:'Great news spreads through the kingdom — twins have been born to a noble family. The people see it as a divine omen of prosperity.',
+  choices:[
+    {text:'Declare a week of celebration',effect:'Gold -10, Happiness +25, Pop +8',
+     resolve:(g)=>{g.gold-=10;g.happy+=25;g.pop+=8;},
+     outcome:'The celebrations last for days! Music fills the streets and your people love you for it.',icon:'🎊',good:true},
+    {text:'Offer a modest gift',effect:'Gold -5, Happiness +10',
+     resolve:(g)=>{g.gold-=5;g.happy+=10;},
+     outcome:'Your gift is graciously received. A warm feeling spreads through the kingdom.',icon:'🎁',good:true},
+    {text:'Acknowledge it quietly',effect:'Nothing',
+     resolve:(g)=>{},
+     outcome:'Life goes on. The people notice your indifference but say nothing — yet.',icon:'😐'},
+  ]
+},
+{
+  id:'spring_bandits',season:0,minDay:5,maxDay:22,weight:9,
+  icon:'🗡',title:'Bandits on the Eastern Road',
+  body:'Merchants are being robbed on the eastern road. Trade has slowed to a trickle. Your citizens demand action.',
+  choices:[
+    {text:'Send soldiers to clear them out',effect:'Army -10, Gold +20, Pop +5',
+     resolve:(g)=>{g.army-=10;g.gold+=20;g.pop+=5;},
+     outcome:'Your soldiers rout the bandits. Trade resumes and grateful merchants pay a tithe.',icon:'⚔',good:true},
+    {text:'Hire mercenaries',effect:'Gold -20, Gold +15 (net -5)',
+     resolve:(g)=>{g.gold-=5;},
+     outcome:'The mercenaries clear the road but charge a hefty fee. At least the problem is solved.',icon:'💰'},
+    {text:'Negotiate with the bandits',effect:'Gold -15, Happy +5',risk:'30% they attack anyway',
+     resolve:(g)=>{g.gold-=15;g.happy+=5;if(Math.random()<.3){g.army-=15;g.pop-=10;}},
+     outcome:'Risky negotiations — the result could go either way.',icon:'🤝'},
+    {text:'Ignore the problem',effect:'Gold -15/day (trade suffers)',
+     resolve:(g)=>{g.gold-=15;g.happy-=10;},
+     outcome:'The bandits grow bolder. Trade collapses and your people blame you.',icon:'😠',bad:true},
+  ]
+},
+{
+  id:'spring_wizard',season:0,minDay:8,maxDay:22,weight:5,
+  icon:'🧙',title:'A Wizard Seeks Refuge',
+  body:'An old wizard, weathered and weary, arrives at your gates. He claims to be fleeing persecution from a neighbouring kingdom and offers his services in exchange for protection.',
+  choices:[
+    {text:'Welcome him — his wisdom is valuable',effect:'Happy +10, Army +15 (magical aid)',
+     resolve:(g)=>{g.happy+=10;g.army+=15;},
+     outcome:'The wizard proves his worth! Strange lights glow from the tower as he works his craft.',icon:'✨',good:true},
+    {text:'Offer shelter but restrict his magic',effect:'Happy +5, Gold +5',
+     resolve:(g)=>{g.happy+=5;g.gold+=5;},
+     outcome:'A cautious welcome. The wizard accepts your terms and lives quietly in your kingdom.',icon:'🏠'},
+    {text:'Turn him away — too dangerous',effect:'Nothing',
+     resolve:(g)=>{},
+     outcome:'The wizard departs without complaint. You notice a faint sadness in his eyes.',icon:'👋'},
+  ]
+},
+{
+  id:'spring_tournament',season:0,minDay:10,maxDay:22,weight:7,
+  icon:'🏆',title:'A Great Tournament',
+  body:'Knights from across the land request permission to hold a tournament in your city. It would attract visitors and boost morale — but it comes at a cost.',
+  choices:[
+    {text:'Host a grand tournament',effect:'Gold -25, Happy +30, Pop +10, Army +10',
+     resolve:(g)=>{g.gold-=25;g.happy+=30;g.pop+=10;g.army+=10;},
+     outcome:'The tournament is spectacular! Knights compete, crowds cheer, and your name is celebrated across the realm.',icon:'🎺',good:true},
+    {text:'Host a modest event',effect:'Gold -10, Happy +15, Pop +5',
+     resolve:(g)=>{g.gold-=10;g.happy+=15;g.pop+=5;},
+     outcome:'A smaller affair, but your people enjoy it. The streets are lively for days.',icon:'🎪'},
+    {text:'Decline — focus on the harvest',effect:'Food +15',
+     resolve:(g)=>{g.food+=15;},
+     outcome:'Your farmers work hard while others play. The harvest will be better for it.',icon:'🌾'},
+  ]
+},
+// ─────────────────────────────────────────────
+// SUMMER EVENTS (days 23-45)
+// ─────────────────────────────────────────────
+{
+  id:'summer_drought',season:1,minDay:23,maxDay:45,weight:10,
+  icon:'☀',title:'A Devastating Drought',
+  body:'The summer sun beats down mercilessly. Wells run dry. Crops wither. Your people begin to ration food. This is your most serious test yet.',
+  choices:[
+    {text:'Irrigate fields immediately (Gold -35)',effect:'Gold -35, Food +25, Pop +5',
+     resolve:(g)=>{g.gold-=35;g.food+=25;g.pop+=5;},
+     outcome:'The irrigation channels save the harvest. Farmers weep with relief. Your people will not forget this.',icon:'💧',good:true},
+    {text:'Import food from neighbours',effect:'Gold -20, Food +15',
+     resolve:(g)=>{g.gold-=20;g.food+=15;},
+     outcome:'Expensive but effective. Your treasury takes a hit, but your people eat tonight.',icon:'🚢'},
+    {text:'Ration strictly and pray',effect:'Food -10, Happy -15',risk:'20% famine: Pop -20',
+     resolve:(g)=>{g.food-=10;g.happy-=15;if(Math.random()<.2){g.pop-=20;g.happy-=20;}},
+     outcome:'A gamble with your people\'s lives. Some will remember this choice forever.',icon:'🙏',risky:true},
+    {text:'Open the royal granary',effect:'Food +30, Happy +20, Gold -0 (uses stored food)',
+     resolve:(g)=>{g.food+=30;g.happy+=20;},
+     outcome:'Only possible if you built the granary. Your foresight saves thousands of lives.',icon:'🌽',
+     requires:'granary',requireText:'Requires: Granary built',good:true},
+  ]
+},
+{
+  id:'summer_ambassador',season:1,minDay:25,maxDay:44,weight:8,
+  icon:'👑',title:'Foreign Ambassador',
+  body:'An ambassador from the Kingdom of Valdris arrives bearing gifts and a proposal: a mutual defence pact. They are powerful — but alliances come with obligations.',
+  choices:[
+    {text:'Accept the alliance',effect:'Army +30, Gold +10, Happy +10',
+     resolve:(g)=>{g.army+=30;g.gold+=10;g.happy+=10;},
+     outcome:'The alliance is sealed with a feast. Your kingdom is now protected by a powerful neighbour.',icon:'🤝',good:true},
+    {text:'Accept trade only (no military)',effect:'Gold +25',
+     resolve:(g)=>{g.gold+=25;},
+     outcome:'A trade agreement is signed. Caravans begin flowing between kingdoms, filling your coffers.',icon:'📜'},
+    {text:'Politely decline',effect:'Nothing, remain independent',
+     resolve:(g)=>{},
+     outcome:'The ambassador departs. Your kingdom remains independent — for now.',icon:'🏴'},
+    {text:'Demand tribute first',effect:'Gold +30, Army -10 (tensions rise)',
+     resolve:(g)=>{g.gold+=30;g.army-=10;},
+     outcome:'The ambassador is insulted but pays. Relations are strained — this may come back to haunt you.',icon:'⚠',risky:true},
+  ]
+},
+{
+  id:'summer_fire',season:1,minDay:28,maxDay:44,weight:9,
+  icon:'🔥',title:'The Great Market Fire',
+  body:'A fire breaks out in the market district! Flames leap from stall to stall. Citizens scramble to escape. Every second counts.',
+  choices:[
+    {text:'Deploy the army to fight the fire',effect:'Army -5, Gold -10, Pop +0 (saved)',
+     resolve:(g)=>{g.army-=5;g.gold-=10;g.happy+=15;},
+     outcome:'Your soldiers form water chains and contain the blaze. The market is saved. The people cheer.',icon:'💪',good:true},
+    {text:'Let it burn, focus on evacuation',effect:'Gold -30 (rebuilding), Pop -5',
+     resolve:(g)=>{g.gold-=30;g.pop-=5;g.happy-=10;},
+     outcome:'Lives are saved but the market is lost. Rebuilding will cost dearly.',icon:'😢'},
+    {text:'Burn a firebreak through neighbouring buildings',effect:'Gold -20, Saves most of market',
+     resolve:(g)=>{g.gold-=20;g.happy-=5;g.gold+=10;},
+     outcome:'A ruthless but effective tactic. Some buildings are sacrificed to save the rest.',icon:'🏚',risky:true},
+  ]
+},
+{
+  id:'summer_plague',season:1,minDay:30,maxDay:44,weight:8,
+  icon:'🤒',title:'A Plague Arrives',
+  body:'Terrible news — a sickness is spreading through the eastern provinces. Travellers bring it to your city gates. If it enters the walls, it could devastate your population.',
+  choices:[
+    {text:'Seal the city gates (quarantine)',effect:'Gold -10, Happy -20, Pop +10 (protected)',
+     resolve:(g)=>{g.gold-=10;g.happy-=20;g.pop+=10;},
+     outcome:'Your people resent the lockdown — but months later they realise you saved their lives.',icon:'🔒',good:true},
+    {text:'Allow healers in, take the risk',effect:'Happy +10',risk:'40% Pop -25',
+     resolve:(g)=>{g.happy+=10;if(Math.random()<.4){g.pop-=25;g.happy-=30;}},
+     outcome:'A dangerous gamble. The sickness may or may not breach your walls.',icon:'⚕',risky:true},
+    {text:'Build a hospital immediately',effect:'Gold -30, Pop +15, permanent disease resistance',
+     resolve:(g)=>{g.gold-=30;g.pop+=15;g.happy+=10;},
+     outcome:'The hospital contains the outbreak and saves lives for generations to come.',icon:'🏥',good:true},
+  ]
+},
+{
+  id:'summer_harvest_good',season:1,minDay:40,maxDay:44,weight:10,
+  icon:'🌾',title:'A Bountiful Harvest',
+  body:'Your farmers return from the fields with more grain than anyone can remember seeing. The harvest is exceptional — almost miraculously so.',
+  choices:[
+    {text:'Store the excess for winter',effect:'Food +40',
+     resolve:(g)=>{g.food+=40;},
+     outcome:'Wise hoarding. When winter bites, your people will eat while others starve.',icon:'🌽',good:true},
+    {text:'Sell the surplus for gold',effect:'Gold +30, Food +15',
+     resolve:(g)=>{g.gold+=30;g.food+=15;},
+     outcome:'The surplus fills your treasury. A fine balance of security and profit.',icon:'⚜'},
+    {text:'Host a harvest festival',effect:'Happy +25, Pop +10, Food +15',
+     resolve:(g)=>{g.happy+=25;g.pop+=10;g.food+=15;},
+     outcome:'The greatest festival your kingdom has ever seen! Songs will be sung about this harvest for decades.',icon:'🎊',good:true},
+  ]
+},
+{
+  id:'summer_spy',season:1,minDay:26,maxDay:44,weight:6,
+  icon:'🕵',title:'A Spy in the Court',
+  body:'Your captain of the guard informs you — in hushed tones — that a spy from a rival kingdom has been captured. He carries coded letters revealing a plot against you.',
+  choices:[
+    {text:'Execute the spy publicly',effect:'Army +10, Happy -5, Fear established',
+     resolve:(g)=>{g.army+=10;g.happy-=5;},
+     outcome:'The execution sends a clear message. Your enemies think twice before acting.',icon:'⚔',risky:true},
+    {text:'Interrogate and use as a double agent',effect:'Army +20, Intel advantage',
+     resolve:(g)=>{g.army+=20;g.gold+=15;},
+     outcome:'Brilliant! You turn the spy against his own masters. Their plans are now your plans.',icon:'🎭',good:true},
+    {text:'Release him as a show of mercy',effect:'Happy +15, Reputation +good',
+     resolve:(g)=>{g.happy+=15;g.pop+=5;},
+     outcome:'Your mercy becomes legend. People across the realm speak of your noble character.',icon:'🕊'},
+  ]
+},
+// ─────────────────────────────────────────────
+// AUTUMN EVENTS (days 46-67)
+// ─────────────────────────────────────────────
+{
+  id:'autumn_rebellion',season:2,minDay:46,maxDay:66,weight:9,
+  icon:'✊',title:'Rebellion in the North',
+  body:'A charismatic rebel leader has raised a banner in the northern hills, promising lower taxes and freedom. Hundreds of your citizens are listening. This could become a war.',
+  choices:[
+    {text:'Crush the rebellion with military force',effect:'Army -25, Happy -10, order restored',
+     resolve:(g)=>{g.army-=25;g.happy-=10;},
+     outcome:'The rebellion is crushed. Order is restored, but the songs they sing about it are not kind.',icon:'⚔',risky:true},
+    {text:'Meet with the rebel leader',effect:'Happy +20, Gold -15 (tax reduction)',
+     resolve:(g)=>{g.happy+=20;g.gold-=15;},
+     outcome:'You listen, you compromise, you find common ground. The rebellion dissolves. Your people call you wise.',icon:'🤝',good:true},
+    {text:'Bribe the rebel leader',effect:'Gold -30, Problem solved temporarily',
+     resolve:(g)=>{g.gold-=30;},
+     outcome:'The gold changes hands. The rebel disbands his forces — for now. But this may not be the last you hear of him.',icon:'💰',risky:true},
+    {text:'Ignore it and hope it fades',effect:'Happy -25, Army -10',risk:'50% full rebellion',
+     resolve:(g)=>{g.happy-=25;g.army-=10;if(Math.random()<.5){g.pop-=20;g.army-=20;}},
+     outcome:'Ignoring a fire never puts it out. The consequences could be catastrophic.',icon:'🔥',bad:true},
+  ]
+},
+{
+  id:'autumn_harvest_poor',season:2,minDay:46,maxDay:60,weight:9,
+  icon:'🌧',title:'A Poor Harvest',
+  body:'Early frosts have damaged the crops. Your granaries are only half full as winter approaches. Your people are worried.',
+  choices:[
+    {text:'Import food urgently',effect:'Gold -25, Food +20',
+     resolve:(g)=>{g.gold-=25;g.food+=20;},
+     outcome:'Expensive, but necessary. Your people will not go hungry — this time.',icon:'🚢'},
+    {text:'Ration food strictly',effect:'Happy -20, Pop -5, Food +15',
+     resolve:(g)=>{g.happy-=20;g.pop-=5;g.food+=15;},
+     outcome:'The rationing is unpopular but it keeps reserves stable. Winter will be hard.',icon:'😔'},
+    {text:'Hunt the royal forests for game',effect:'Food +15, Happy +5',
+     resolve:(g)=>{g.food+=15;g.happy+=5;},
+     outcome:'The royal hunters bring back enough game to supplement the harvest. A creative solution.',icon:'🦌'},
+    {text:'Open the palace kitchens to the poor',effect:'Happy +20, Food -10, Gold -5',
+     resolve:(g)=>{g.happy+=20;g.food-=10;g.gold-=5;},
+     outcome:'The gesture is remembered for generations. Your people would follow you anywhere.',icon:'❤',good:true},
+  ]
+},
+{
+  id:'autumn_general',season:2,minDay:48,maxDay:66,weight:7,
+  icon:'⚔',title:'General Requests a Raise',
+  body:'Your most loyal general — commander of the army — requests a significant pay raise. Without him, army morale could crumble. With him, your military is unmatched.',
+  choices:[
+    {text:'Grant the full raise',effect:'Gold -20/ongoing, Army +20, Happy army +15',
+     resolve:(g)=>{g.gold-=20;g.army+=20;g.happy+=10;},
+     outcome:'The general beams with pride. His loyalty — and that of his soldiers — is total.',icon:'🫡',good:true},
+    {text:'Offer half',effect:'Gold -10, Army +5',
+     resolve:(g)=>{g.gold-=10;g.army+=5;},
+     outcome:'A compromise. The general accepts without complaint, though his smile doesn\'t quite reach his eyes.',icon:'🤝'},
+    {text:'Refuse — discipline above all',effect:'Army -15, Happy -10',
+     resolve:(g)=>{g.army-=15;g.happy-=10;},
+     outcome:'The general leaves your service. His soldiers lose morale. This was a costly mistake.',icon:'😠',bad:true},
+  ]
+},
+{
+  id:'autumn_philosopher',season:2,minDay:50,maxDay:66,weight:5,
+  icon:'📜',title:'The Philosopher\'s Proposal',
+  body:'A renowned philosopher arrives with a proposal: build a great university and attract scholars from across the known world. It would cost a fortune but transform your kingdom\'s future.',
+  choices:[
+    {text:'Build the University',effect:'Gold -40, Pop +20, Army +10, Happy +15 (legacy)',
+     resolve:(g)=>{g.gold-=40;g.pop+=20;g.army+=10;g.happy+=15;},
+     outcome:'Scholars flock to your city. Within a generation, your kingdom leads the world in knowledge and innovation.',icon:'🎓',good:true},
+    {text:'Offer partial funding',effect:'Gold -20, Pop +10',
+     resolve:(g)=>{g.gold-=20;g.pop+=10;},
+     outcome:'A smaller institution opens its doors. The philosopher calls it a start.',icon:'📚'},
+    {text:'Decline — too expensive',effect:'Nothing',
+     resolve:(g)=>{},
+     outcome:'The philosopher leaves for a richer kingdom. You wonder sometimes what might have been.',icon:'😔'},
+  ]
+},
+{
+  id:'autumn_invasion',season:2,minDay:55,maxDay:67,weight:8,
+  icon:'🛡',title:'Neighbouring Kingdom Threatens War',
+  body:'The Kingdom of Darkhollow has massed troops on your border. Their king sends a message: pay tribute or face invasion. Your generals await your command.',
+  choices:[
+    {text:'Mobilise and prepare to fight',effect:'Army +20, Gold -20, Happy -10',
+     resolve:(g)=>{g.army+=20;g.gold-=20;g.happy-=10;if(Math.random()<.5){g.army-=30;g.pop-=10;}else{g.army+=10;g.gold+=20;}},
+     outcome:'War — the gamble of kings. Victory brings glory, defeat brings ruin.',icon:'⚔',risky:true},
+    {text:'Pay the tribute',effect:'Gold -30, Peace maintained',
+     resolve:(g)=>{g.gold-=30;g.happy-=5;},
+     outcome:'Humiliating but pragmatic. Your treasury bleeds, but your people live to fight another day.',icon:'💰'},
+    {text:'Forge a counter-alliance',effect:'Gold -15, Army +35',
+     resolve:(g)=>{g.gold-=15;g.army+=35;},
+     outcome:'You call in favours from distant kingdoms. Darkhollow backs down when they see your allies.',icon:'🤝',good:true},
+    {text:'Assassinate their king',effect:'Army -10',risk:'Could escalate terribly',
+     resolve:(g)=>{g.army-=10;if(Math.random()<.5){g.happy+=20;g.army+=15;}else{g.army-=30;g.pop-=20;}},
+     outcome:'A dangerous gamble that could change everything.',icon:'🗡',risky:true},
+  ]
+},
+// ─────────────────────────────────────────────
+// WINTER EVENTS (days 68-90)
+// ─────────────────────────────────────────────
+{
+  id:'winter_blizzard',season:3,minDay:68,maxDay:88,weight:10,
+  icon:'❄',title:'The Great Blizzard',
+  body:'A blizzard of unprecedented fury has buried your kingdom under three feet of snow. Roads are impassable. Fuel is running low. Your people huddle in their homes, cold and afraid.',
+  choices:[
+    {text:'Open the palace to the homeless',effect:'Happy +25, Gold -10, Pop +5',
+     resolve:(g)=>{g.happy+=25;g.gold-=10;g.pop+=5;},
+     outcome:'Hundreds shelter in your palace. When spring comes, these people will be your most devoted subjects.',icon:'❤',good:true},
+    {text:'Distribute emergency fuel supplies',effect:'Gold -20, Happy +20',
+     resolve:(g)=>{g.gold-=20;g.happy+=20;},
+     outcome:'Your supply wagons brave the storm. Every household has fuel. Your people survive — and remember.',icon:'🔥'},
+    {text:'Order everyone to stay indoors and wait',effect:'Happy -15',risk:'20% deaths from cold',
+     resolve:(g)=>{g.happy-=15;if(Math.random()<.2){g.pop-=15;}},
+     outcome:'The cold is merciless. Some who are weak do not survive the night.',icon:'😔',risky:true},
+  ]
+},
+{
+  id:'winter_mystery',season:3,minDay:70,maxDay:88,weight:6,
+  icon:'🌙',title:'A Mysterious Stranger',
+  body:'On a moonless night, a cloaked figure is brought before you. She claims to be a prophet who has foreseen the future of your kingdom — both the glory and the ruin.',
+  choices:[
+    {text:'Listen to her prophecy',effect:'Random: great boon or curse',
+     resolve:(g)=>{if(Math.random()<.6){g.gold+=20;g.happy+=20;g.army+=15;}else{g.gold-=15;g.happy-=15;}},
+     outcome:'The prophecy proves... interesting.',icon:'🔮',risky:true},
+    {text:'Imprison her as a charlatan',effect:'Happy -5, Army +5',
+     resolve:(g)=>{g.happy-=5;g.army+=5;},
+     outcome:'Your guards lock her away. But strange dreams disturb your sleep for weeks.',icon:'🔒'},
+    {text:'Give her shelter and freedom',effect:'Happy +10, mysterious bonus',
+     resolve:(g)=>{g.happy+=10;g.food+=15;g.army+=10;},
+     outcome:'The prophet stays, and strange good fortune seems to follow your kingdom.',icon:'✨',good:true},
+  ]
+},
+{
+  id:'winter_final_battle',season:3,minDay:80,maxDay:89,weight:9,
+  icon:'⚔',title:'The Final Test',
+  body:'A massive coalition of rival kingdoms has decided this is their moment. They march on your capital. Everything you have built is at stake. This is the battle that will define your legacy.',
+  choices:[
+    {text:'Meet them in open battle',effect:'Army -40, if army > 80: victory',
+     resolve:(g)=>{g.army-=40;if(g.army>40){g.gold+=50;g.happy+=30;g.pop+=20;}else{g.pop-=30;g.happy-=30;}},
+     outcome:'The battle of your generation. Victory or defeat is determined by the strength of your army.',icon:'⚔',risky:true},
+    {text:'Retreat behind the walls and siege them out',effect:'Food -30, Army +10, Gold -20',
+     resolve:(g)=>{g.food-=30;g.army+=10;g.gold-=20;g.happy+=10;},
+     outcome:'A long siege. Your walls hold. Eventually the coalition runs out of supplies and retreats.',icon:'🧱'},
+    {text:'Negotiate at the last moment',effect:'Gold -50, Peace — but pay tribute',
+     resolve:(g)=>{g.gold-=50;g.happy-=10;},
+     outcome:'A costly peace. Your treasury is diminished, but your kingdom stands.',icon:'🕊'},
+    {text:'Use everything — every soldier, every trick',effect:'Army -60, decisive outcome',
+     resolve:(g)=>{g.army-=60;if(g.army>0&&g.gold>30){g.gold+=80;g.happy+=50;g.pop+=30;}else{g.pop-=40;g.happy-=40;}},
+     outcome:'You throw everything into this battle. The outcome will shape the history books.',icon:'💥',risky:true},
+  ]
+},
+{
+  id:'winter_legacy',season:3,minDay:85,maxDay:90,weight:10,
+  icon:'📜',title:'The History Books',
+  body:'As your third year draws to a close, a historian asks to record your reign for posterity. What will you be remembered for?',
+  choices:[
+    {text:'"A builder who raised a great city"',effect:'Score bonus for buildings',
+     resolve:(g)=>{g.score+=g.buildings.length*50;g.happy+=10;},
+     outcome:'The historian writes of your great works. Your buildings will outlast you by centuries.',icon:'🏛',good:true},
+    {text:'"A warrior who never lost a battle"',effect:'Score bonus for army strength',
+     resolve:(g)=>{g.score+=g.army*3;g.army+=20;},
+     outcome:'Your battles are recorded with admiration. Soldiers name their children after you.',icon:'⚔',good:true},
+    {text:'"A beloved ruler of a happy people"',effect:'Score bonus for happiness',
+     resolve:(g)=>{g.score+=g.happy*5;g.pop+=20;},
+     outcome:'The historian struggles to find enough pages. Story after story of people whose lives you improved.',icon:'❤',good:true},
+  ]
+},
+// ─────────────────────────────────────────────
+// UNIVERSAL (any season)
+// ─────────────────────────────────────────────
+{
+  id:'build_farm',season:-1,minDay:1,maxDay:89,weight:8,
+  icon:'🌾',title:'The Farmers\' Petition',
+  body:'A delegation of farmers asks for help expanding their fields. With royal investment, they could triple the food supply — feeding your kingdom for years to come.',
+  choices:[
+    {text:'Fund the expansion (cost 20 gold)',effect:'Gold -20, Food +25, + Farm building',
+     resolve:(g)=>{g.gold-=20;g.food+=25;addBuilding('farm');},
+     outcome:'New fields stretch across the valley. Your food supply is now the envy of neighbouring kingdoms.',icon:'🌾',good:true},
+    {text:'Offer them labour instead of gold',effect:'Army -5, Food +15',
+     resolve:(g)=>{g.army-=5;g.food+=15;},
+     outcome:'Soldiers temporarily work the fields. Morale dips slightly, but the harvest improves.',icon:'👷'},
+    {text:'Let them fund it themselves',effect:'Food +5 (slowly)',
+     resolve:(g)=>{g.food+=5;},
+     outcome:'The farmers manage on their own, but progress is slow. Every little helps.',icon:'🐢'},
+  ]
+},
+{
+  id:'build_market',season:-1,minDay:5,maxDay:89,weight:8,
+  icon:'🏪',title:'Merchants Propose a Market',
+  body:'A group of wealthy merchants offers to build a permanent market if you provide the land and some funding. It would bring trade — and taxes — to your city.',
+  choices:[
+    {text:'Provide land and 25 gold',effect:'Gold -25, Gold +15/turn, + Market building',
+     resolve:(g)=>{g.gold-=25;addBuilding('market');},
+     outcome:'The market opens to great fanfare. Gold flows into your treasury from taxes and trade.',icon:'⚜',good:true},
+    {text:'Provide land only',effect:'Gold +8/turn, smaller market',
+     resolve:(g)=>{g.gold+=5;},
+     outcome:'A modest market opens. Better than nothing, and it cost you nothing.',icon:'🪙'},
+    {text:'Build the market yourself',effect:'Gold -35, Gold +20/turn, full control',
+     resolve:(g)=>{g.gold-=35;addBuilding('market');g.gold+=10;},
+     outcome:'You own the market outright. The profits are entirely yours.',icon:'💰',good:true},
+  ]
+},
+{
+  id:'build_barracks',season:-1,minDay:10,maxDay:89,weight:7,
+  icon:'⚔',title:'Your General\'s Request',
+  body:'Your general has identified a plot of land perfect for a military barracks. Trained soldiers could be produced regularly — strengthening your army for years to come.',
+  choices:[
+    {text:'Build the barracks (30 gold)',effect:'Gold -30, Army +20, + Barracks',
+     resolve:(g)=>{g.gold-=30;g.army+=20;addBuilding('barracks');},
+     outcome:'The barracks opens and the sound of training fills the morning air. Your army grows stronger.',icon:'🛡',good:true},
+    {text:'Build a watchtower instead',effect:'Gold -15, Army +10, better defence',
+     resolve:(g)=>{g.gold-=15;g.army+=10;},
+     outcome:'The watchtower provides early warning of any threat. A sound defensive choice.',icon:'🗼'},
+    {text:'Not now',effect:'Nothing',
+     resolve:(g)=>{},
+     outcome:'The land remains empty. Perhaps another time.',icon:'😐'},
+  ]
+},
+{
+  id:'comet',season:-1,minDay:15,maxDay:88,weight:4,
+  icon:'☄',title:'A Comet in the Sky',
+  body:'A blazing comet streaks across the night sky for three days. Your priests call it an omen. Your scholars call it natural. Your people call it terrifying.',
+  choices:[
+    {text:'Declare it a sign of divine favour',effect:'Happy +20, Army +10',
+     resolve:(g)=>{g.happy+=20;g.army+=10;},
+     outcome:'Your proclamation turns fear into fervour. Your people march to work singing battle hymns.',icon:'✨',good:true},
+    {text:'Consult the scholars',effect:'Happy -5, then +15',
+     resolve:(g)=>{g.happy+=10;g.gold+=10;},
+     outcome:'The scholars explain it rationally. The fearful are reassured. The curious are delighted.',icon:'🔭'},
+    {text:'Lock yourself in the palace',effect:'Happy -15',
+     resolve:(g)=>{g.happy-=15;},
+     outcome:'Your absence during the panic is noticed and deeply unhelpful. Rumours spread.',icon:'😰',bad:true},
+  ]
+},
+{
+  id:'lost_child',season:-1,minDay:5,maxDay:88,weight:5,
+  icon:'👦',title:'The Lost Child',
+  body:'A small child is found wandering your palace grounds alone. She claims her village was destroyed by raiders. She has nowhere to go.',
+  choices:[
+    {text:'Take her in as a ward of the crown',effect:'Happy +15, Pop +2, story bonus',
+     resolve:(g)=>{g.happy+=15;g.pop+=2;},
+     outcome:'The story spreads through the kingdom. You are seen as a ruler with a heart. Your popularity soars.',icon:'❤',good:true},
+    {text:'Send soldiers to find her village',effect:'Army -5, Happy +20, Gold +10',
+     resolve:(g)=>{g.army-=5;g.happy+=20;g.gold+=10;},
+     outcome:'Your soldiers find the village and drive out the raiders. The grateful villagers pledge loyalty and taxes.',icon:'⚔',good:true},
+    {text:'Place her with a local family',effect:'Happy +5',
+     resolve:(g)=>{g.happy+=5;},
+     outcome:'A kind farmer takes her in. Simple and practical.',icon:'🏠'},
+  ]
+},
+{
+  id:'eclipse',season:-1,minDay:20,maxDay:80,weight:3,
+  icon:'🌑',title:'A Total Eclipse',
+  body:'The sun disappears at midday. Darkness falls across your kingdom for three terrifying minutes. Your people are in a panic. What do you do?',
+  choices:[
+    {text:'Stand before them calmly and speak',effect:'Happy +25, Legendary reputation',
+     resolve:(g)=>{g.happy+=25;g.army+=10;},
+     outcome:'Your calm presence in the darkness becomes one of the defining moments of your reign. Songs are written about this day.',icon:'👑',good:true},
+    {text:'Ring the church bells',effect:'Happy +10',
+     resolve:(g)=>{g.happy+=10;},
+     outcome:'The familiar sound of the bells comforts your people. The eclipse passes. Life resumes.',icon:'⛪'},
+    {text:'Hide — what else can you do?',effect:'Happy -20',
+     resolve:(g)=>{g.happy-=20;},
+     outcome:'Your disappearance during the eclipse frightens your people more than the eclipse itself.',icon:'😨',bad:true},
+  ]
+},
+{
+  id:'treasure_map',season:-1,minDay:15,maxDay:75,weight:5,
+  icon:'🗺',title:'A Treasure Map',
+  body:'A dying sailor presses a faded map into your hand. It claims to show the location of a buried treasure — immense wealth hidden by a forgotten king.',
+  choices:[
+    {text:'Send an expedition (20 gold)',effect:'Gold -20',risk:'60% Gold +80, 40% Gold -20',
+     resolve:(g)=>{g.gold-=20;if(Math.random()<.6){g.gold+=80;g.happy+=15;}else{g.happy-=5;}},
+     outcome:'A gamble worthy of legends. Fortune favours the bold — sometimes.',icon:'🎲',risky:true},
+    {text:'Sell the map to a merchant',effect:'Gold +15',
+     resolve:(g)=>{g.gold+=15;},
+     outcome:'The merchant pays well. You wonder sometimes what was buried there.',icon:'💰'},
+    {text:'Ignore it',effect:'Nothing',
+     resolve:(g)=>{},
+     outcome:'The map gathers dust. Some opportunities only come once.',icon:'😐'},
+  ]
+},
+{
+  id:'ancient_ruins',season:-1,minDay:20,maxDay:80,weight:5,
+  icon:'🏛',title:'Ancient Ruins Discovered',
+  body:'Workers digging foundations for a new building have unearthed ancient ruins — possibly from a civilisation that predates your kingdom by a thousand years.',
+  choices:[
+    {text:'Excavate carefully (scholars)',effect:'Gold -15, Happy +20, knowledge gained',
+     resolve:(g)=>{g.gold-=15;g.happy+=20;g.army+=10;},
+     outcome:'The excavation reveals extraordinary artifacts. Your kingdom becomes a centre of learning.',icon:'📜',good:true},
+    {text:'Salvage the materials for building',effect:'Gold +20, nothing discovered',
+     resolve:(g)=>{g.gold+=20;},
+     outcome:'Practical, if unimaginative. The stones go into new walls.',icon:'🧱'},
+    {text:'Seal and preserve it as a monument',effect:'Happy +15, Gold +5 (tourism)',
+     resolve:(g)=>{g.happy+=15;g.gold+=5;},
+     outcome:'People travel from far away to see the ancient site. It becomes part of your kingdom\'s identity.',icon:'🗺',good:true},
+  ]
+},
+];
+
+/* ══════════════════════════════════════════════
+   CANVAS RENDERER
+   Animated kingdom that grows as you play
+══════════════════════════════════════════════ */
+const KingdomCanvas = {
+  canvas:null, ctx:null, t:0, raf:null,
+  particles:[], birds:[], clouds:[],
 
   init(canvas){
-    this.gl=canvas.getContext('webgl',{antialias:true,alpha:false})||
-            canvas.getContext('experimental-webgl',{antialias:true,alpha:false});
-    if(!this.gl){alert('WebGL not supported — try a newer browser');return false;}
-    const gl=this.gl;
-
-    // Compile shaders
-    const vs=this._compile(gl.VERTEX_SHADER,this.VS);
-    const fs=this._compile(gl.FRAGMENT_SHADER,this.FS);
-    this.prog=gl.createProgram();
-    gl.attachShader(this.prog,vs);gl.attachShader(this.prog,fs);
-    gl.linkProgram(this.prog);
-    if(!gl.getProgramParameter(this.prog,gl.LINK_STATUS)){
-      console.error('Shader link failed',gl.getProgramInfoLog(this.prog));return false;
-    }
-    gl.useProgram(this.prog);
-
-    // Buffer
-    this.buf=gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
-
-    // Attribute locations
-    this.aPos  =gl.getAttribLocation(this.prog,'aPos');
-    this.aColor=gl.getAttribLocation(this.prog,'aColor');
-    this.aAlpha=gl.getAttribLocation(this.prog,'aAlpha');
-    this.uRes  =gl.getUniformLocation(this.prog,'uResolution');
-
-    gl.enableVertexAttribArray(this.aPos);
-    gl.enableVertexAttribArray(this.aColor);
-    gl.enableVertexAttribArray(this.aAlpha);
-
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
-
-    return true;
+    this.canvas=canvas;
+    this.ctx=canvas.getContext('2d');
+    this.resize();
+    window.addEventListener('resize',()=>this.resize());
+    this._spawnParticles();
+    this._spawnBirds();
+    this._spawnClouds();
+    if(this.raf)cancelAnimationFrame(this.raf);
+    this.loop();
   },
 
-  _compile(type,src){
-    const gl=this.gl;
-    const s=gl.createShader(type);
-    gl.shaderSource(s,src);gl.compileShader(s);
-    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))
-      console.error('Shader error',gl.getShaderInfoLog(s));
-    return s;
+  resize(){
+    if(this.canvas){
+      this.canvas.width=window.innerWidth;
+      this.canvas.height=window.innerHeight;
+    }
   },
 
-  // Draw all vertices in one batch
-  // verts = Float32Array: [x,y, r,g,b, a,  x,y,r,g,b,a, ...]
-  flush(verts){
-    const gl=this.gl;
-    gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
-    gl.bufferData(gl.ARRAY_BUFFER,verts,gl.DYNAMIC_DRAW);
-    const STRIDE=6*4; // 6 floats * 4 bytes
-    gl.vertexAttribPointer(this.aPos,  2,gl.FLOAT,false,STRIDE,0);
-    gl.vertexAttribPointer(this.aColor,3,gl.FLOAT,false,STRIDE,2*4);
-    gl.vertexAttribPointer(this.aAlpha,1,gl.FLOAT,false,STRIDE,5*4);
-    gl.drawArrays(gl.TRIANGLES,0,verts.length/6);
+  _spawnParticles(){
+    this.particles=[];
+    for(let i=0;i<40;i++){
+      this.particles.push({
+        x:Math.random(),y:Math.random()+.5,
+        vx:(Math.random()-.5)*.0003,vy:-Math.random()*.0002-.0001,
+        r:Math.random()*2+.5,a:Math.random()*.4+.1,
+        life:Math.random(),maxLife:Math.random()*3+2,
+        col:Math.random()>.5?'rgba(245,200,66,':'rgba(200,134,10,',
+      });
+    }
   },
 
-  clear(r,g,b){
-    const gl=this.gl;
-    gl.clearColor(r,g,b,1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.uniform2f(this.uRes,GAME.canvas.width,GAME.canvas.height);
+  _spawnBirds(){
+    this.birds=[];
+    for(let i=0;i<6;i++){
+      this.birds.push({
+        x:Math.random()*1.2-.1,y:Math.random()*.4+.1,
+        vx:Math.random()*.0008+.0003,vy:(Math.random()-.5)*.0002,
+        wing:Math.random()*Math.PI*2,wingSpeed:Math.random()*.1+.08,
+        size:Math.random()*3+2,
+      });
+    }
   },
 
-  resize(w,h){
-    if(this.gl){this.gl.viewport(0,0,w,h);}
+  _spawnClouds(){
+    this.clouds=[];
+    for(let i=0;i<5;i++){
+      this.clouds.push({
+        x:Math.random(),y:Math.random()*.3+.05,
+        w:Math.random()*.25+.12,h:Math.random()*.08+.04,
+        speed:Math.random()*.00015+.00005,
+        alpha:Math.random()*.25+.08,
+      });
+    }
   },
-};
 
-/* ══════════════════════════════════════════════
-   VERTEX BUFFER BUILDER
-   Builds triangle fans for each hex
-   SUBDIVISIONS = 12 → 12 triangles per top face
-   + 12*2 cliff triangles = ~36 per hex minimum
-   With lighting variation across each triangle: visually smooth
-══════════════════════════════════════════════ */
-const SUBDIVISIONS = 12; // triangles around hex fan — 12 = smooth circle approx
-
-// Hex corner points (flat-top, scaled to HEX_SIZE)
-function hexCorner(cx,cy,i,size){
-  const angle=(60*i-30)*RAD;
-  return{x:cx+size*Math.cos(angle),y:cy+size*Math.sin(angle)};
-}
-
-// Push a triangle into Float32Array builder
-function pushTri(arr,x0,y0,r0,g0,b0,a0, x1,y1,r1,g1,b1,a1, x2,y2,r2,g2,b2,a2){
-  arr.push(x0,y0,r0,g0,b0,a0, x1,y1,r1,g1,b1,a1, x2,y2,r2,g2,b2,a2);
-}
-
-// Terrain palette: [topLight, topDark, cliffLight, cliffDark]
-const TPAL=[
-  [[0.55,0.78,0.32],[0.35,0.58,0.18],[0.30,0.50,0.14],[0.20,0.38,0.08]],// PLAINS
-  [[0.18,0.48,0.12],[0.10,0.34,0.06],[0.12,0.34,0.08],[0.06,0.22,0.04]],// FOREST
-  [[0.72,0.62,0.42],[0.52,0.44,0.28],[0.42,0.34,0.20],[0.28,0.22,0.12]],// HILLS
-  [[0.58,0.54,0.62],[0.38,0.34,0.42],[0.32,0.28,0.36],[0.18,0.16,0.22]],// MOUNTAIN
-  [[0.88,0.72,0.28],[0.70,0.54,0.16],[0.58,0.42,0.10],[0.40,0.28,0.06]],// DESERT
-  [[0.88,0.92,0.96],[0.72,0.78,0.85],[0.64,0.70,0.78],[0.50,0.56,0.64]],// SNOW
-  [[0.28,0.42,0.30],[0.18,0.30,0.20],[0.14,0.26,0.18],[0.10,0.18,0.12]],// MARSH
-];
-
-function buildHexVerts(arr, sx, sy, elev, terrainType, factionIdx, selAlpha, tick){
-  const hw = HEX_SIZE * Cam.zoom;
-  const hh = HEX_SIZE * VTILT * Cam.zoom;
-  const cht= elev * 22 * VTILT * Cam.zoom;
-  const pal= TPAL[terrainType] || TPAL[0];
-  const tl = pal[0], td = pal[1], cl = pal[2], cd = pal[3];
-
-  // Micro-noise shimmer (per tick per position) for surface detail
-  const shimmer = Math.sin(tick*0.8 + sx*0.04 + sy*0.03)*0.025;
-
-  // ── TOP FACE: triangle fan from center, SUBDIVISIONS segments
-  // Center vertex (slightly lighter)
-  const cx=sx, cy=sy+hh*0.5; // visual center of hex shifted down
-
-  // Pre-compute the 6 screen-space hex corners (pointy-top for iso view)
-  // We use an elliptical hex to simulate the iso tilt
-  const corners=[];
-  for(let i=0;i<6;i++){
-    const ang=(60*i)*RAD;
-    corners.push({
-      x:cx + hw*0.866*Math.cos(ang),
-      y:cy + hh*0.5*Math.sin(ang),
-    });
-  }
-
-  // For each of the SUBDIVISIONS subdivisions around each of the 6 faces:
-  // each face is split into (SUBDIVISIONS/6) radial slices
-  const SLICES = SUBDIVISIONS; // slices per full circle = 12
-  for(let s=0;s<SLICES;s++){
-    const a0=(s/SLICES)*Math.PI*2;
-    const a1=((s+1)/SLICES)*Math.PI*2;
-
-    // Screen coords of the two arc points (elliptical to match iso view)
-    const x0=cx+hw*0.9*Math.cos(a0), y0=cy+hh*0.5*Math.sin(a0);
-    const x1=cx+hw*0.9*Math.cos(a1), y1=cy+hh*0.5*Math.sin(a1);
-
-    // Lighting: NW-facing triangles are brighter
-    const lum0 = 0.75 + Math.cos(a0-Math.PI*0.22)*0.22 + shimmer;
-    const lum1 = 0.75 + Math.cos(a1-Math.PI*0.22)*0.22 + shimmer;
-    const lumC = 0.9 + shimmer;
-
-    const r0=tl[0]*lum0, g0=tl[1]*lum0, b0=tl[2]*lum0;
-    const r1=tl[0]*lum1, g1=tl[1]*lum1, b1=tl[2]*lum1;
-    const rc=tl[0]*lumC, gc=tl[1]*lumC, bc=tl[2]*lumC;
-
-    pushTri(arr, cx,cy,rc,gc,bc,1, x0,y0,r0,g0,b0,1, x1,y1,r1,g1,b1,1);
-  }
-
-  // ── CLIFF SIDES (elevation > 0)
-  if(elev>0&&cht>0){
-    // Left cliff: western half of the hex (a = PI..2PI range approx)
-    // Right cliff: eastern half
-    const CSLICES=8;
-    for(let s=0;s<CSLICES;s++){
-      const a0=Math.PI+(s/CSLICES)*Math.PI;
-      const a1=Math.PI+((s+1)/CSLICES)*Math.PI;
-      const x0=cx+hw*0.88*Math.cos(a0), y0=cy+hh*0.5*Math.sin(a0);
-      const x1=cx+hw*0.88*Math.cos(a1), y1=cy+hh*0.5*Math.sin(a1);
-      const lum=0.5+Math.cos(a0-Math.PI*1.5)*0.2;
-      const r=cl[0]*lum, g=cl[1]*lum, b=cl[2]*lum;
-      const rd=cd[0]*lum*.75, gd=cd[1]*lum*.75, bd=cd[2]*lum*.75;
-      // Two triangles per cliff segment
-      pushTri(arr, x0,y0,r,g,b,1, x1,y1,r,g,b,1, x1,y1+cht,rd,gd,bd,1);
-      pushTri(arr, x0,y0,r,g,b,1, x1,y1+cht,rd,gd,bd,1, x0,y0+cht,rd,gd,bd,1);
-    }
-    // Right cliff
-    for(let s=0;s<CSLICES;s++){
-      const a0=(s/CSLICES)*Math.PI;
-      const a1=((s+1)/CSLICES)*Math.PI;
-      const x0=cx+hw*0.88*Math.cos(a0), y0=cy+hh*0.5*Math.sin(a0);
-      const x1=cx+hw*0.88*Math.cos(a1), y1=cy+hh*0.5*Math.sin(a1);
-      const lum=0.42+Math.cos(a0)*0.15;
-      const r=cl[0]*lum, g=cl[1]*lum, b=cl[2]*lum;
-      const rd=cd[0]*lum*.7, gd=cd[1]*lum*.7, bd=cd[2]*lum*.7;
-      pushTri(arr, x0,y0,r,g,b,1, x1,y1,r,g,b,1, x1,y1+cht,rd,gd,bd,1);
-      pushTri(arr, x0,y0,r,g,b,1, x1,y1+cht,rd,gd,bd,1, x0,y0+cht,rd,gd,bd,1);
-    }
-  }
-
-  // ── FACTION TERRITORY OVERLAY (transparent colored wash)
-  if(factionIdx>=0){
-    const fc=hexToRGB(FC[factionIdx]);
-    const isPlayer=(factionIdx===World.playerFaction);
-    const alpha=isPlayer?0.18:0.12;
-    const ba=isPlayer?0.65:0.38;
-    // Solid fill overlay
-    for(let s=0;s<SLICES;s++){
-      const a0=(s/SLICES)*Math.PI*2, a1=((s+1)/SLICES)*Math.PI*2;
-      const x0=cx+hw*0.88*Math.cos(a0), y0=cy+hh*0.48*Math.sin(a0);
-      const x1=cx+hw*0.88*Math.cos(a1), y1=cy+hh*0.48*Math.sin(a1);
-      pushTri(arr, cx,cy,fc[0],fc[1],fc[2],alpha, x0,y0,fc[0],fc[1],fc[2],alpha, x1,y1,fc[0],fc[1],fc[2],alpha);
-    }
-    // Border ring
-    const BSLICES=24;
-    for(let s=0;s<BSLICES;s++){
-      const a0=(s/BSLICES)*Math.PI*2, a1=((s+1)/BSLICES)*Math.PI*2;
-      const ir=0.82,or=0.90;
-      const xi0=cx+hw*ir*Math.cos(a0),yi0=cy+hh*0.48*ir*Math.sin(a0);
-      const xi1=cx+hw*ir*Math.cos(a1),yi1=cy+hh*0.48*ir*Math.sin(a1);
-      const xo0=cx+hw*or*Math.cos(a0),yo0=cy+hh*0.48*or*Math.sin(a0);
-      const xo1=cx+hw*or*Math.cos(a1),yo1=cy+hh*0.48*or*Math.sin(a1);
-      pushTri(arr, xi0,yi0,fc[0],fc[1],fc[2],ba, xo0,yo0,fc[0],fc[1],fc[2],ba, xi1,yi1,fc[0],fc[1],fc[2],ba);
-      pushTri(arr, xo0,yo0,fc[0],fc[1],fc[2],ba, xo1,yo1,fc[0],fc[1],fc[2],ba, xi1,yi1,fc[0],fc[1],fc[2],ba);
-    }
-  }
-
-  // ── SELECTION HIGHLIGHT
-  if(selAlpha>0){
-    const pulse=0.5+Math.sin(tick*3)*0.35;
-    const BSLICES=18;
-    for(let s=0;s<BSLICES;s++){
-      const a0=(s/BSLICES)*Math.PI*2, a1=((s+1)/BSLICES)*Math.PI*2;
-      const ir=0.78,or=0.92;
-      const xi0=cx+hw*ir*Math.cos(a0),yi0=cy+hh*0.48*ir*Math.sin(a0);
-      const xi1=cx+hw*ir*Math.cos(a1),yi1=cy+hh*0.48*ir*Math.sin(a1);
-      const xo0=cx+hw*or*Math.cos(a0),yo0=cy+hh*0.48*or*Math.sin(a0);
-      const xo1=cx+hw*or*Math.cos(a1),yo1=cy+hh*0.48*or*Math.sin(a1);
-      const a=pulse*selAlpha;
-      pushTri(arr, xi0,yi0,1,.85,.2,a, xo0,yo0,1,.85,.2,a, xi1,yi1,1,.85,.2,a);
-      pushTri(arr, xo0,yo0,1,.85,.2,a, xo1,yo1,1,.85,.2,a, xi1,yi1,1,.85,.2,a);
-    }
-  }
-}
-
-// Draw building/group overlays using Canvas 2D on top of WebGL
-// (Canvas 2D used for text labels, icons — WebGL handles terrain)
-const Overlay={
-  canvas:null, ctx:null,
-  init(){
-    this.canvas=document.createElement('canvas');
-    this.canvas.style.cssText='position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;';
-    document.body.appendChild(this.canvas);
-    this.ctx=this.canvas.getContext('2d');
+  loop(){
+    this.raf=requestAnimationFrame(()=>this.loop());
+    this.draw();
   },
-  resize(w,h){this.canvas.width=w;this.canvas.height=h;},
-  clear(){this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height);},
-  drawBuilding(sx,sy,type,faction,hp,maxHP){
+
+  draw(){
     const ctx=this.ctx;
-    const z=Math.max(.4,Cam.zoom);
-    const icons={[B.MAIN_TOWER]:'🏰',[B.HOUSE]:'🏠',[B.BARRACKS]:'⚔',[B.FORGE]:'🔨',[B.ELITE_FORGE]:'⚙',[B.WATCH_TOWER]:'🗼',[B.WALLS]:'🧱'};
-    const icon=icons[type]||'🏗';
-    const fs=Math.max(10,16*z);
-    ctx.font=`${fs}px sans-serif`;
-    ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillText(icon,sx,sy-12*z);
-    // HP bar for main tower
-    if(type===B.MAIN_TOWER){
-      const bw=40*z,bh=5*z;
-      const pct=Math.max(0,hp/maxHP);
-      ctx.fillStyle='rgba(0,0,0,.6)';ctx.fillRect(sx-bw/2,sy-24*z,bw,bh);
-      const hc=pct>.6?'#4ad95c':pct>.3?'#f5c842':'#d94a4a';
-      ctx.fillStyle=hc;ctx.fillRect(sx-bw/2,sy-24*z,bw*pct,bh);
-    }
-    // Faction color dot
-    if(faction>=0){
-      ctx.beginPath();ctx.arc(sx+10*z,sy-20*z,3*z,0,Math.PI*2);
-      ctx.fillStyle=FC[faction]||'#aaa';ctx.fill();
-    }
-  },
-  drawGroup(sx,sy,group){
-    if(!group.alive||group.troops<=0)return;
-    const ctx=this.ctx;
-    const z=Math.max(.35,Cam.zoom);
-    const fc=FC[group.faction]||'#aaa';
-    const isPlayer=(group.faction===World.playerFaction);
-    const r=(isPlayer?14:11)*z;
-    const selected=(GAME.selGroup&&GAME.selGroup.id===group.id);
+    const W=this.canvas.width, H=this.canvas.height;
+    this.t+=.012;
 
-    // Shadow
-    ctx.beginPath();ctx.ellipse(sx,sy+r*.35,r*.7,r*.25,0,0,Math.PI*2);
-    ctx.fillStyle='rgba(0,0,0,.3)';ctx.fill();
+    // Sky gradient based on season
+    const season=getSeason();
+    const skyColors=[
+      ['#0a1a05','#1a3a0a','#2a5a15'],// spring
+      ['#0a0a05','#1a1505','#3a2a05'],// summer
+      ['#080a08','#150f05','#2a1a08'],// autumn
+      ['#050810','#0a1220','#102035'],// winter
+    ];
+    const sc=skyColors[season.idx]||skyColors[0];
+    const sky=ctx.createLinearGradient(0,0,0,H);
+    sky.addColorStop(0,sc[0]);sky.addColorStop(.5,sc[1]);sky.addColorStop(1,sc[2]);
+    ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
 
-    // Body — polygon for smooth look
-    const segs=14;
-    ctx.beginPath();
-    for(let s=0;s<=segs;s++){
-      const a=(s/segs)*Math.PI*2;
-      const pr=r*(1+(selected?Math.sin(GAME.tick*3)*.08:.02));
-      if(s===0)ctx.moveTo(sx+Math.cos(a)*pr,sy+Math.sin(a)*pr);
-      else ctx.lineTo(sx+Math.cos(a)*pr,sy+Math.sin(a)*pr);
+    // Moon / sun glow
+    const isSummer=season.idx===1;
+    const glowX=W*.75, glowY=H*.25;
+    const sunMoon=ctx.createRadialGradient(glowX,glowY,0,glowX,glowY,W*.35);
+    if(isSummer){
+      sunMoon.addColorStop(0,'rgba(255,200,50,.12)');
+      sunMoon.addColorStop(.5,'rgba(200,150,20,.05)');
+    }else{
+      sunMoon.addColorStop(0,'rgba(150,180,220,.10)');
+      sunMoon.addColorStop(.5,'rgba(100,130,180,.04)');
     }
-    ctx.closePath();
-    const grd=ctx.createRadialGradient(sx-r*.28,sy-r*.28,r*.08,sx,sy,r);
-    grd.addColorStop(0,lightenHex(fc,40));grd.addColorStop(1,fc);
-    ctx.fillStyle=grd;ctx.fill();
-    ctx.strokeStyle=isPlayer?'#f5c842':'rgba(255,255,255,.65)';
-    ctx.lineWidth=isPlayer?(selected?3:2.2):1.4;ctx.stroke();
+    sunMoon.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=sunMoon;ctx.fillRect(0,0,W,H);
 
-    // Troop count
-    ctx.fillStyle='#fff';
-    ctx.font=`bold ${Math.max(8,Math.round(9*z))}px Courier New`;
-    ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillText(group.troops,sx,sy);ctx.textBaseline='alphabetic';
-
-    // Crown for player
-    if(isPlayer&&z>.45){
-      ctx.font=`${Math.max(7,Math.round(8*z))}px sans-serif`;
-      ctx.fillStyle='#f5c842';
-      ctx.fillText('♔',sx,sy-r-3*z);
-    }
-    // Moved indicator
-    if(group.moved){
-      ctx.globalAlpha=0.4;
-      ctx.fillStyle='rgba(0,0,0,.5)';
-      ctx.beginPath();ctx.arc(sx,sy,r,0,Math.PI*2);ctx.fill();
+    // Stars (winter only)
+    if(season.idx===3){
+      ctx.fillStyle='rgba(255,255,255,.7)';
+      for(let i=0;i<60;i++){
+        const sx=((i*137+200)%W),sy=((i*97+50)%(H*.4));
+        const ss=.5+Math.sin(this.t+i)*.3;
+        ctx.globalAlpha=(.3+Math.sin(this.t*.7+i)*.2);
+        ctx.beginPath();ctx.arc(sx,sy,ss,0,Math.PI*2);ctx.fill();
+      }
       ctx.globalAlpha=1;
     }
-    // Group name (only if player and zoomed in)
-    if(isPlayer&&z>0.8){
-      ctx.font=`${Math.max(7,Math.round(7*z))}px Courier New`;
-      ctx.fillStyle='rgba(232,213,163,.75)';
-      ctx.textAlign='center';
-      ctx.fillText(group.name,sx,sy+r+9*z);
-    }
-  },
-  drawMoveRange(hexes){
-    const ctx=this.ctx;
-    for(const{q,r}of hexes){
-      const cell=World.get(q,r);if(!cell)continue;
-      const s=Cam.hexToScreen(q,r,cell.z);
-      if(!Cam.visible(s.sx,s.sy))continue;
-      const z=Cam.zoom;
-      const hw=HEX_SIZE*.85*z, hh=HEX_SIZE*VTILT*.48*z;
-      ctx.strokeStyle='rgba(74,144,217,.7)';ctx.lineWidth=2;
+
+    // Clouds
+    for(const c of this.clouds){
+      c.x+=c.speed;if(c.x>1.2)c.x=-0.2;
+      ctx.globalAlpha=c.alpha;
+      ctx.fillStyle='rgba(220,220,240,1)';
       ctx.beginPath();
-      for(let i=0;i<6;i++){
-        const a=(60*i)*RAD;
-        const px=s.sx+hw*Math.cos(a), py=s.sy+hh*Math.sin(a);
-        if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
-      }
-      ctx.closePath();ctx.stroke();
-      ctx.fillStyle='rgba(74,144,217,.1)';ctx.fill();
+      ctx.ellipse(c.x*W,c.y*H,c.w*W*.5,c.h*H*.5,0,0,Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha=1;
     }
-  },
-  drawAttackRange(hexes){
-    const ctx=this.ctx;
-    for(const{q,r}of hexes){
-      const cell=World.get(q,r);if(!cell)continue;
-      const s=Cam.hexToScreen(q,r,cell.z);
-      if(!Cam.visible(s.sx,s.sy))continue;
-      const z=Cam.zoom;
-      const hw=HEX_SIZE*.85*z, hh=HEX_SIZE*VTILT*.48*z;
-      ctx.strokeStyle='rgba(217,74,74,.8)';ctx.lineWidth=2;
+
+    // Ground layers
+    const numBuildings=G.buildings.length;
+    const groundY=H*.65;
+
+    // Far hills
+    ctx.fillStyle=season.idx===3?'rgba(50,70,90,.6)':'rgba(30,50,20,.6)';
+    ctx.beginPath();ctx.moveTo(0,groundY*.9);
+    for(let x=0;x<=W;x+=30){
+      const y=groundY*.9-Math.sin(x*.008+1)*H*.12-Math.sin(x*.02)*H*.04;
+      ctx.lineTo(x,y);
+    }
+    ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fill();
+
+    // Mid ground
+    ctx.fillStyle=season.idx===3?'rgba(40,60,80,.8)':season.idx===2?'rgba(60,40,20,.8)':'rgba(25,55,15,.8)';
+    ctx.beginPath();ctx.moveTo(0,groundY*.95);
+    for(let x=0;x<=W;x+=20){
+      const y=groundY*.95-Math.sin(x*.012+2)*H*.08-Math.sin(x*.03)*H*.03;
+      ctx.lineTo(x,y);
+    }
+    ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fill();
+
+    // Main ground
+    const gc=season.idx===3?['#1a2a35','#243040']:season.idx===2?['#3a2a10','#503820']:['#1a3a08','#264a10'];
+    ctx.fillStyle=gc[0];
+    ctx.fillRect(0,groundY,W,H-groundY);
+
+    // Ground texture strip
+    ctx.fillStyle=gc[1];
+    ctx.fillRect(0,groundY,W,6);
+
+    // ── BUILDINGS (grow with progress) ──
+    const bldX=W*.12;
+    this._drawCastle(ctx,bldX,groundY,numBuildings);
+
+    // Additional buildings based on what player built
+    G.buildings.forEach((b,i)=>{
+      const bx=W*(.28+i*.1)%(W*.8)+W*.1;
+      const by=groundY;
+      this._drawBuilding(ctx,b,bx,by,this.t);
+    });
+
+    // River
+    const riverX=W*.7;
+    ctx.strokeStyle='rgba(40,100,160,.5)';
+    ctx.lineWidth=8;
+    ctx.beginPath();
+    ctx.moveTo(riverX,H);
+    for(let y=H;y>groundY;y-=10){
+      ctx.lineTo(riverX+Math.sin(y*.05+this.t)*.8*W*.03,y);
+    }
+    ctx.stroke();
+
+    // Trees (forest on right)
+    for(let i=0;i<8;i++){
+      const tx=W*(.75+i*.032+Math.sin(i*7)*.02);
+      const th2=H*(.06+Math.sin(i*3)*.02);
+      this._drawTree(ctx,tx,groundY,th2,season.idx);
+    }
+
+    // Birds
+    for(const b of this.birds){
+      b.x+=b.vx;b.y+=b.vy+Math.sin(this.t*b.wingSpeed*3)*.0001;
+      if(b.x>1.2){b.x=-.1;b.y=Math.random()*.35+.1;}
+      b.wing+=b.wingSpeed;
+      ctx.strokeStyle='rgba(150,150,120,.6)';ctx.lineWidth=1.2;
       ctx.beginPath();
-      for(let i=0;i<6;i++){
-        const a=(60*i)*RAD;
-        const px=s.sx+hw*Math.cos(a), py=s.sy+hh*Math.sin(a);
-        if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+      ctx.moveTo(b.x*W-b.size*2,b.y*H);
+      ctx.quadraticCurveTo(b.x*W-b.size,b.y*H-b.size*Math.sin(b.wing)*1.5,b.x*W,b.y*H);
+      ctx.quadraticCurveTo(b.x*W+b.size,b.y*H-b.size*Math.sin(b.wing)*1.5,b.x*W+b.size*2,b.y*H);
+      ctx.stroke();
+    }
+
+    // Particles (smoke from chimneys etc)
+    for(const p of this.particles){
+      p.x+=p.vx;p.y+=p.vy;p.life+=.008;
+      if(p.life>p.maxLife){p.life=0;p.x=.1+Math.random()*.6;p.y=.55+Math.random()*.1;}
+      const a=p.a*(1-p.life/p.maxLife);
+      ctx.globalAlpha=a;
+      ctx.fillStyle=p.col+'1)';
+      ctx.beginPath();ctx.arc(p.x*W,p.y*H,p.r,0,Math.PI*2);ctx.fill();
+    }
+    ctx.globalAlpha=1;
+
+    // Season overlay
+    if(season.idx===3){
+      // Snow falling
+      ctx.fillStyle='rgba(220,235,255,.7)';
+      for(let i=0;i<30;i++){
+        const sx=((i*173+this.t*40)%W);
+        const sy=((i*97+this.t*30)%H);
+        ctx.globalAlpha=.4+Math.sin(this.t+i)*.2;
+        ctx.beginPath();ctx.arc(sx,sy,1.5,0,Math.PI*2);ctx.fill();
       }
-      ctx.closePath();ctx.stroke();
-      ctx.fillStyle='rgba(217,74,74,.12)';ctx.fill();
+      ctx.globalAlpha=1;
     }
-  },
-};
-
-/* ══════════════════════════════════════════════
-   HEX GRID HELPERS
-══════════════════════════════════════════════ */
-function hexNeighbours(q,r){
-  return[[q+1,r],[q-1,r],[q,r+1],[q,r-1],[q+1,r-1],[q-1,r+1]]
-    .map(([qq,rr])=>({q:qq,r:rr}))
-    .filter(h=>World.get(h.q,h.r)!==null);
-}
-
-function hexDistance(q0,r0,q1,r1){
-  return(Math.abs(q0-q1)+Math.abs(q0+r0-q1-r1)+Math.abs(r0-r1))/2;
-}
-
-// BFS move range
-function getMoveRange(q,r,steps){
-  const visited=new Map();
-  visited.set(`${q},${r}`,0);
-  const queue=[{q,r,steps}];
-  const result=[];
-  while(queue.length){
-    const{q:cq,r:cr,steps:cs}=queue.shift();
-    if(cs<=0)continue;
-    for(const nb of hexNeighbours(cq,cr)){
-      const key=`${nb.q},${nb.r}`;
-      const cell=World.get(nb.q,nb.r);
-      if(!cell||visited.has(key))continue;
-      const cost=1/TMOV[cell.t];
-      if(cs>=cost){
-        visited.set(key,1);
-        result.push({q:nb.q,r:nb.r});
-        queue.push({q:nb.q,r:nb.r,steps:cs-cost});
+    if(season.idx===2){
+      // Falling leaves
+      ctx.fillStyle='rgba(180,80,20,.6)';
+      for(let i=0;i<15;i++){
+        const sx=((i*193+this.t*20)%W);
+        const sy=((i*131+this.t*25+Math.sin(this.t+i)*20)%H);
+        ctx.globalAlpha=.3+Math.sin(this.t*.5+i)*.2;
+        ctx.fillRect(sx,sy,4,4);
       }
-    }
-  }
-  return result;
-}
-
-/* ══════════════════════════════════════════════
-   BUILDINGS & UPGRADES CATALOG
-══════════════════════════════════════════════ */
-const BUILD_CATALOG=[
-  {id:B.HOUSE,       name:'House',        gold:80,  prod:20, turns:1, troopsPerTurn:5,  desc:'Produces 5 troops/turn'},
-  {id:B.BARRACKS,    name:'Barracks',     gold:150, prod:40, turns:2, troopsPerTurn:12, desc:'Produces 12 troops/turn'},
-  {id:B.FORGE,       name:'Forge',        gold:200, prod:60, turns:3, troopsPerTurn:0,  desc:'Unlocks iron weapons & armor upgrades'},
-  {id:B.ELITE_FORGE, name:'Elite Forge',  gold:400, prod:120,turns:4, troopsPerTurn:0,  desc:'Unlocks tanks & siege engines'},
-  {id:B.WATCH_TOWER, name:'Watch Tower',  gold:100, prod:30, turns:2, troopsPerTurn:0,  desc:'+20% defence in adjacent hexes'},
-  {id:B.WALLS,       name:'Walls',        gold:120, prod:35, turns:2, troopsPerTurn:0,  desc:'+35% defence on this hex'},
-];
-
-const UPGRADE_CATALOG=[
-  // Weapons
-  {id:'iron_sword', name:'Iron Swords',     gold:100,prod:30,turns:2,req:B.FORGE,      desc:'+15% attack',  stat:{atkBonus:15}, delivery:2},
-  {id:'steel_sword',name:'Steel Swords',    gold:200,prod:60,turns:2,req:B.FORGE,      desc:'+25% attack',  stat:{atkBonus:25}, delivery:2},
-  {id:'war_axe',    name:'War Axes',        gold:180,prod:55,turns:2,req:B.FORGE,      desc:'+20% atk, -5% def',stat:{atkBonus:20,defMalus:5},delivery:2},
-  {id:'siege_eng',  name:'Siege Engine',    gold:450,prod:140,turns:4,req:B.ELITE_FORGE,desc:'+60% atk vs buildings',stat:{siegeBonus:60},delivery:2},
-  {id:'iron_tank',  name:'Iron Tank',       gold:600,prod:180,turns:5,req:B.ELITE_FORGE,desc:'+40% atk, +30% def, -30% move',stat:{atkBonus:40,defBonus:30,moveMalus:30},delivery:2},
-  // Armor
-  {id:'leather_2',  name:'Hardened Leather',gold:80, prod:25,turns:2,req:B.NONE,       desc:'+10% defence',stat:{defBonus:10}, delivery:2},
-  {id:'chain_mail', name:'Chain Mail',      gold:160,prod:50,turns:2,req:B.FORGE,      desc:'+20% defence',stat:{defBonus:20}, delivery:2},
-  {id:'plate_armor',name:'Plate Armor',     gold:300,prod:90,turns:2,req:B.FORGE,      desc:'+35% defence, -10% move',stat:{defBonus:35,moveMalus:10},delivery:2},
-  {id:'elite_plate',name:'Elite Plate',     gold:500,prod:150,turns:2,req:B.ELITE_FORGE,desc:'+50% def, -15% move',stat:{defBonus:50,moveMalus:15},delivery:2},
-];
-
-/* ══════════════════════════════════════════════
-   AI
-══════════════════════════════════════════════ */
-const AI={
-  runTurn(factionIdx){
-    const groups=World.groups.filter(g=>g.faction===factionIdx&&g.alive&&g.troops>0);
-    if(!groups.length)return;
-
-    for(const g of groups){
-      if(g.moved)continue;
-      // Find nearest enemy group or player's main tower
-      let bestTarget=null, bestDist=999;
-      const enemies=World.groups.filter(e=>e.faction!==factionIdx&&e.alive&&e.troops>0);
-      for(const e of enemies){
-        const d=hexDistance(g.q,g.r,e.q,e.r);
-        if(d<bestDist){bestDist=d;bestTarget=e;}
-      }
-      // Also target player main tower
-      const ptower=World.buildings.find(b=>b.type===B.MAIN_TOWER&&b.faction===World.playerFaction);
-      if(ptower){
-        const d=hexDistance(g.q,g.r,ptower.q,ptower.r);
-        if(d<bestDist){bestDist=d;bestTarget={q:ptower.q,r:ptower.r,isTower:true,faction:World.playerFaction};}
-      }
-
-      if(!bestTarget){g.moved=true;continue;}
-
-      // Try to attack adjacent
-      if(bestDist<=1.5&&!bestTarget.isTower){
-        Combat.resolve(g,bestTarget,factionIdx);
-        g.moved=true;g.attacked=true;
-      } else if(bestDist<=1.5&&bestTarget.isTower){
-        // Attack tower
-        const dmg=Math.floor(g.troops*0.08*(0.8+Math.random()*.4));
-        World.towerHP=Math.max(0,World.towerHP-dmg);
-        const bld=World.buildings.find(b=>b.type===B.MAIN_TOWER&&b.faction===World.playerFaction);
-        if(bld)bld.hp=World.towerHP;
-        GAME.blogAdd(`${World.factions[factionIdx].name} attacked your Main Tower for ${dmg} damage!`,'d');
-        g.moved=true;g.attacked=true;
-      } else {
-        // Move toward target
-        const range=getMoveRange(g.q,g.r,3);
-        if(range.length){
-          let best=range[0], bd=999;
-          for(const h of range){
-            const d=hexDistance(h.q,h.r,bestTarget.q,bestTarget.r);
-            // Don't step on another group
-            const occ=World.groups.find(gg=>gg.alive&&gg.q===h.q&&gg.r===h.r);
-            if(!occ&&d<bd){bd=d;best=h;}
-          }
-          g.q=best.q;g.r=best.r;
-        }
-        g.moved=true;
-      }
+      ctx.globalAlpha=1;
     }
   },
-};
 
-/* ══════════════════════════════════════════════
-   COMBAT
-══════════════════════════════════════════════ */
-const Combat={
-  resolve(attacker, defender, atkFac){
-    if(!attacker.alive||!defender.alive)return;
-    const cell=World.get(defender.q,defender.r)||{t:T.PLAINS};
-    const defBonus=TDEF[cell.t]/100;
-    const atkStr=attacker.troops*(0.7+Math.random()*.6);
-    const defStr=defender.troops*(0.65+Math.random()*.55)*(1+defBonus);
-    const atkLoss=Math.ceil(defStr*.18);
-    const defLoss=Math.ceil(atkStr*.22);
-    attacker.troops=Math.max(0,attacker.troops-atkLoss);
-    defender.troops=Math.max(0,defender.troops-defLoss);
-    const an=World.factions[atkFac]?.name||'Unknown';
-    const dn=World.factions[defender.faction]?.name||'Unknown';
-    if(defender.troops<=0){
-      defender.alive=false;
-      GAME.blogAdd(`${an} wiped out ${dn}'s ${defender.name}!`,'v');
-    } else {
-      GAME.blogAdd(`${an} attacked ${dn}: Atk-${atkLoss} Def-${defLoss}`,'i');
-    }
-    if(attacker.troops<=0){attacker.alive=false;}
-  },
-};
+  _drawCastle(ctx,x,y,level){
+    const W=this.canvas.width,H=this.canvas.height;
+    const s=Math.min(1,0.4+level*.12); // grows with progress
+    const h=H*.22*s;
+    const w=W*.14*s;
 
-/* ══════════════════════════════════════════════
-   INPUT HANDLER
-══════════════════════════════════════════════ */
-const Input={
-  drag:false,lx:0,ly:0,pinch:false,pd:0,tap:null,TD:12,TT:230,
-  init(canvas){
-    canvas.addEventListener('touchstart',e=>this.ts(e),{passive:false});
-    canvas.addEventListener('touchmove', e=>this.tm(e),{passive:false});
-    canvas.addEventListener('touchend',  e=>this.te(e),{passive:false});
-    canvas.addEventListener('touchcancel',e=>this.te(e),{passive:false});
-    canvas.addEventListener('mousedown', e=>this.md(e));
-    canvas.addEventListener('mousemove', e=>this.mm(e));
-    canvas.addEventListener('mouseup',   e=>this.mu(e));
-    canvas.addEventListener('wheel',     e=>this.wh(e),{passive:false});
-  },
-  d2(t){const dx=t[0].clientX-t[1].clientX,dy=t[0].clientY-t[1].clientY;return Math.sqrt(dx*dx+dy*dy);},
-  ts(e){e.preventDefault();
-    if(e.touches.length===2){this.pinch=true;this.drag=false;this.pd=this.d2(e.touches);return;}
-    const t=e.touches[0];this.drag=true;this.pinch=false;this.lx=t.clientX;this.ly=t.clientY;
-    this.tap={x:t.clientX,y:t.clientY,time:Date.now()};
-  },
-  tm(e){e.preventDefault();
-    if(this.pinch&&e.touches.length===2){
-      const d=this.d2(e.touches),sc=d/this.pd;this.pd=d;
-      this.doZoom(sc,(e.touches[0].clientX+e.touches[1].clientX)/2,(e.touches[0].clientY+e.touches[1].clientY)/2);return;
+    // Base
+    ctx.fillStyle='#3a3028';
+    ctx.fillRect(x-w/2,y-h,w,h);
+    // Left tower
+    ctx.fillStyle='#4a3830';
+    ctx.fillRect(x-w/2-w*.2,y-h*.85,w*.22,h*.85);
+    // Right tower
+    ctx.fillRect(x+w/2-w*.02,y-h*.85,w*.22,h*.85);
+    // Battlements
+    ctx.fillStyle='#5a4840';
+    const bw=w*.08;
+    for(let i=-3;i<=3;i+=2){ctx.fillRect(x+i*bw*1.1-bw/2,y-h-bw*.8,bw,bw*.8);}
+    for(let i=-1;i<=1;i+=2){
+      const tx=x+(i<0?-w/2-w*.2:w/2-w*.02);
+      for(let j=-2;j<=2;j+=2){ctx.fillRect(tx+j*bw*.6,y-h*.85-bw*.6,bw*.7,bw*.6);}
     }
-    if(this.drag&&e.touches.length===1){
-      const t=e.touches[0];
-      Cam.x+=(t.clientX-this.lx)/Cam.zoom;Cam.y+=(t.clientY-this.ly)/Cam.zoom;
-      this.lx=t.clientX;this.ly=t.clientY;
-      if(this.tap&&Math.hypot(t.clientX-this.tap.x,t.clientY-this.tap.y)>this.TD)this.tap=null;
+    // Gate
+    ctx.fillStyle='#1a1008';
+    ctx.fillRect(x-bw,y-h*.35,bw*2,h*.35);
+    // Flag
+    if(level>0){
+      ctx.strokeStyle='#8a6020';ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(x,y-h);ctx.lineTo(x,y-h-h*.25);ctx.stroke();
+      ctx.fillStyle='#d94a4a';
+      ctx.beginPath();ctx.moveTo(x,y-h-h*.25);ctx.lineTo(x+w*.12,y-h-h*.18);ctx.lineTo(x,y-h-h*.11);ctx.closePath();ctx.fill();
+    }
+    // Windows
+    ctx.fillStyle='rgba(245,200,66,.3)';
+    ctx.fillRect(x-w*.12,y-h*.6,w*.1,w*.1);
+    ctx.fillRect(x+w*.02,y-h*.6,w*.1,w*.1);
+  },
+
+  _drawBuilding(ctx,b,x,y,t){
+    const icons={'farm':'🌾','market':'🏪','barracks':'⚔','tavern':'🍺',
+                 'library':'📚','cathedral':'⛪','forge':'🔨','granary':'🌽',
+                 'treasury':'💰','walls':'🧱','harbour':'⚓','palace':'🏰'};
+    const ic=icons[b.id]||'🏗';
+    const sz=Math.max(18,22+Math.sin(t+x)*.5);
+    ctx.font=`${sz}px sans-serif`;
+    ctx.textAlign='center';ctx.textBaseline='bottom';
+    ctx.globalAlpha=.85;
+    ctx.fillText(ic,x,y);
+    ctx.globalAlpha=1;
+  },
+
+  _drawTree(ctx,x,y,h,season){
+    ctx.fillStyle=season===2?'#8a4010':season===3?'rgba(180,200,220,.4)':'#1a5010';
+    ctx.beginPath();
+    ctx.moveTo(x,y-h);ctx.lineTo(x+h*.4,y);ctx.lineTo(x-h*.4,y);ctx.closePath();ctx.fill();
+    if(season!==3){
+      ctx.fillStyle=season===2?'#6a3008':'#0e3808';
+      ctx.beginPath();
+      ctx.moveTo(x,y-h*1.3);ctx.lineTo(x+h*.28,y-h*.5);ctx.lineTo(x-h*.28,y-h*.5);ctx.closePath();ctx.fill();
     }
   },
-  te(e){e.preventDefault();this.pinch=false;
-    if(!e.touches.length){this.drag=false;
-      if(this.tap&&Date.now()-this.tap.time<this.TT)GAME.onTap(this.tap.x,this.tap.y);
-      this.tap=null;
-    }
-  },
-  md(e){this.drag=true;this.lx=e.clientX;this.ly=e.clientY;this.tap={x:e.clientX,y:e.clientY,time:Date.now()};},
-  mm(e){if(!this.drag)return;Cam.x+=(e.clientX-this.lx)/Cam.zoom;Cam.y+=(e.clientY-this.ly)/Cam.zoom;this.lx=e.clientX;this.ly=e.clientY;if(this.tap&&Math.hypot(e.clientX-this.tap.x,e.clientY-this.tap.y)>this.TD)this.tap=null;},
-  mu(e){this.drag=false;if(this.tap&&Date.now()-this.tap.time<this.TT)GAME.onTap(this.tap.x,this.tap.y);this.tap=null;},
-  wh(e){e.preventDefault();this.doZoom(e.deltaY<0?1.12:.88,e.clientX,e.clientY);},
-  doZoom(sc,fx,fy){
-    const old=Cam.zoom;
-    Cam.zoom=Math.max(Cam.minZ,Math.min(Cam.maxZ,Cam.zoom*sc));
-    const ratio=Cam.zoom/old-1;
-    const cx=GAME.canvas.width/2,cy=GAME.canvas.height/2;
-    Cam.x-=(fx-cx)/old*ratio; Cam.y-=(fy-cy)/old*ratio;
-  },
+
+  stop(){if(this.raf){cancelAnimationFrame(this.raf);this.raf=null;}},
 };
 
 /* ══════════════════════════════════════════════
@@ -804,17 +909,16 @@ const Input={
 const HomeAnim={
   canvas:null,ctx:null,t:0,raf:null,pts:[],
   init(){
-    this.canvas=document.getElementById('home-bg');
+    this.canvas=document.getElementById('home-canvas');
     if(!this.canvas)return;
     this.ctx=this.canvas.getContext('2d');
-    this.resize();
-    window.addEventListener('resize',()=>this.resize());
+    this.resize();window.addEventListener('resize',()=>this.resize());
     this.pts=[];
-    for(let i=0;i<60;i++)this.pts.push({
+    for(let i=0;i<50;i++)this.pts.push({
       x:Math.random(),y:Math.random(),
-      vx:(Math.random()-.5)*.00016,vy:(Math.random()-.5)*.00009,
-      r:Math.random()*2+.4,a:Math.random()*.5+.1,
-      col:Math.random()>.5?'#c8860a':'#4a90d9',
+      vx:(Math.random()-.5)*.00015,vy:-Math.random()*.0001,
+      r:Math.random()*1.8+.4,a:Math.random()*.45+.1,
+      col:Math.random()>.4?'rgba(245,200,66,':'rgba(200,134,10,',
     });
     if(this.raf)cancelAnimationFrame(this.raf);
     this.loop();
@@ -826,27 +930,39 @@ const HomeAnim={
     const ctx=this.ctx,W=this.canvas.width,H=this.canvas.height;
     this.t+=.007;
     const bg=ctx.createLinearGradient(0,0,0,H);
-    bg.addColorStop(0,'#030508');bg.addColorStop(.5,'#07101a');bg.addColorStop(1,'#0a1420');
+    bg.addColorStop(0,'#020301');bg.addColorStop(.5,'#060401');bg.addColorStop(1,'#0a0601');
     ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);
-    // Animated iso grid hint
-    ctx.save();ctx.globalAlpha=.05;ctx.strokeStyle='#c8860a';ctx.lineWidth=1;
-    const tw=88,th=44,off=(this.t*6)%tw;
-    for(let gx=-2;gx<W/tw*2+2;gx++)for(let gy=-2;gy<H/th+2;gy++){
-      const sx=(gx-gy)*tw/2+off+W/2,sy=(gx+gy)*th/2*VTILT+H*.4;
-      ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx+tw/2,sy+th/2*VTILT);
-      ctx.lineTo(sx,sy+th*VTILT);ctx.lineTo(sx-tw/2,sy+th/2*VTILT);ctx.closePath();ctx.stroke();
+    // Kingdom silhouette
+    ctx.fillStyle='rgba(15,10,3,.9)';
+    ctx.beginPath();ctx.moveTo(0,H*.65);
+    // Castle silhouette
+    const cx=W*.3;
+    ctx.lineTo(cx-W*.12,H*.65);ctx.lineTo(cx-W*.12,H*.42);
+    ctx.lineTo(cx-W*.09,H*.42);ctx.lineTo(cx-W*.09,H*.38);
+    ctx.lineTo(cx-W*.06,H*.38);ctx.lineTo(cx-W*.06,H*.42);
+    ctx.lineTo(cx-W*.03,H*.42);ctx.lineTo(cx-W*.03,H*.3);
+    ctx.lineTo(cx+W*.03,H*.3);ctx.lineTo(cx+W*.03,H*.42);
+    ctx.lineTo(cx+W*.06,H*.42);ctx.lineTo(cx+W*.06,H*.38);
+    ctx.lineTo(cx+W*.09,H*.38);ctx.lineTo(cx+W*.09,H*.42);
+    ctx.lineTo(cx+W*.12,H*.42);ctx.lineTo(cx+W*.12,H*.65);
+    // Trees
+    for(let i=0;i<8;i++){
+      const tx=W*.52+i*W*.065;
+      const th=H*.1+Math.sin(i*3)*.05*H;
+      ctx.lineTo(tx-W*.025,H*.65);ctx.lineTo(tx,H*.65-th);ctx.lineTo(tx+W*.025,H*.65);
     }
-    ctx.restore();
+    ctx.lineTo(W,H*.65);ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fill();
+    // Stars
     for(const p of this.pts){
       p.x+=p.vx;p.y+=p.vy;
-      if(p.x<0)p.x=1;if(p.x>1)p.x=0;if(p.y<0)p.y=1;if(p.y>1)p.y=0;
+      if(p.x<0)p.x=1;if(p.x>1)p.x=0;if(p.y<0)p.y=.8;
       ctx.beginPath();ctx.arc(p.x*W,p.y*H,p.r,0,Math.PI*2);
-      ctx.fillStyle=p.col;ctx.globalAlpha=p.a*(.7+Math.sin(this.t*2+p.x*10)*.3);ctx.fill();
+      ctx.fillStyle=p.col+(p.a*(.7+Math.sin(this.t*2+p.x*10)*.3))+')';
+      ctx.fill();
     }
-    ctx.globalAlpha=1;
-    const gl=ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,W*.44);
-    gl.addColorStop(0,`rgba(200,134,10,${.05+Math.sin(this.t)*.018})`);
-    gl.addColorStop(.5,`rgba(74,144,217,${.032+Math.cos(this.t*.7)*.015})`);
+    // Warm glow from castle
+    const gl=ctx.createRadialGradient(cx,H*.5,0,cx,H*.5,W*.4);
+    gl.addColorStop(0,`rgba(245,150,20,${.08+Math.sin(this.t)*.02})`);
     gl.addColorStop(1,'rgba(0,0,0,0)');
     ctx.fillStyle=gl;ctx.fillRect(0,0,W,H);
   },
@@ -854,635 +970,595 @@ const HomeAnim={
 };
 
 /* ══════════════════════════════════════════════
+   HELPER FUNCTIONS
+══════════════════════════════════════════════ */
+function getSeason(){
+  for(let i=0;i<SEASONS.length;i++){
+    const s=SEASONS[i];
+    if(G.day>=s.days[0]&&G.day<=s.days[1])return{...s,idx:i};
+  }
+  return{...SEASONS[3],idx:3};
+}
+
+function addBuilding(id){
+  if(!BUILDINGS[id])return;
+  if(!G.buildings.find(b=>b.id===id)){
+    G.buildings.push(BUILDINGS[id]);
+  }
+}
+
+function hasBuilding(id){return G.buildings.some(b=>b.id===id);}
+
+function clampStats(){
+  G.gold  =Math.max(0,Math.min(MAX_STAT,Math.round(G.gold)));
+  G.food  =Math.max(0,Math.min(MAX_STAT,Math.round(G.food)));
+  G.army  =Math.max(0,Math.min(MAX_STAT,Math.round(G.army)));
+  G.happy =Math.max(0,Math.min(MAX_STAT,Math.round(G.happy)));
+  G.pop   =Math.max(0,Math.min(MAX_STAT,Math.round(G.pop)));
+}
+
+function calcScore(){
+  return Math.floor(G.gold*.5+G.food*.4+G.army*.6+G.happy*.8+G.pop*1.0+G.buildings.length*30+G.achievements.length*50+G.day*2);
+}
+
+function getStatColor(val,max){
+  const p=val/max;
+  if(p>.6)return '#4ad94a';
+  if(p>.3)return '#f5c842';
+  return '#d94a4a';
+}
+
+/* ══════════════════════════════════════════════
    SAVE / LOAD
 ══════════════════════════════════════════════ */
 const Save={
-  KEY:'realm_conquest_save',
   save(){
-    const d={
-      grid:World.grid,groups:World.groups,buildings:World.buildings,
-      deliveries:World.deliveries,turn:World.turn,factions:World.factions,
-      playerFaction:World.playerFaction,towerHP:World.towerHP,
-      towerMaxHP:World.towerMaxHP,seed:World.seed,
-      playerRes:GAME.playerRes,empireName:GAME.empireName,empireColor:GAME.empireColor,
-    };
-    try{localStorage.setItem(this.KEY,JSON.stringify(d));GAME.toast('💾 Saved');return JSON.stringify(d);}
-    catch(e){GAME.toast('Save failed');return null;}
+    try{
+      G.score=calcScore();
+      localStorage.setItem(SAVE_KEY,JSON.stringify(G));
+      // Update meta
+      const meta=this.getMeta();
+      meta.last_played=new Date().toDateString();
+      meta.total_runs=G.total_runs;
+      meta.best_score=Math.max(meta.best_score||0,G.score);
+      meta.all_achievements=[...new Set([...(meta.all_achievements||[]),...G.achievements])];
+      localStorage.setItem(META_KEY,JSON.stringify(meta));
+    }catch(e){console.warn('Save failed',e);}
   },
   load(){
     try{
-      const raw=localStorage.getItem(this.KEY)||window.SHORTCUTS_SAVE;
+      const raw=localStorage.getItem(SAVE_KEY)||window.SHORTCUTS_SAVE;
       if(!raw)return false;
       const d=JSON.parse(raw);
-      Object.assign(World,{grid:d.grid,groups:d.groups,buildings:d.buildings,
-        deliveries:d.deliveries,turn:d.turn,factions:d.factions,
-        playerFaction:d.playerFaction,towerHP:d.towerHP,
-        towerMaxHP:d.towerMaxHP,seed:d.seed});
-      GAME.playerRes=d.playerRes;
-      GAME.empireName=d.empireName||'Your Empire';
-      GAME.empireColor=d.empireColor||'#4a90d9';
+      Object.assign(G,d);
       return true;
     }catch(e){return false;}
   },
+  getMeta(){
+    try{return JSON.parse(localStorage.getItem(META_KEY))||{};}
+    catch(e){return{};}
+  },
+  clear(){localStorage.removeItem(SAVE_KEY);},
 };
 
 /* ══════════════════════════════════════════════
-   COLOUR HELPERS
+   DAILY PASSIVE INCOME
+   Buildings produce resources each day
 ══════════════════════════════════════════════ */
-function hexToRGB(hex){
-  const n=parseInt(hex.replace('#',''),16);
-  return[(n>>16&255)/255,(n>>8&255)/255,(n&255)/255];
+function applyDailyIncome(){
+  if(hasBuilding('farm'))     G.food +=5;
+  if(hasBuilding('market'))   G.gold +=8;
+  if(hasBuilding('barracks')) G.army +=6;
+  if(hasBuilding('tavern'))   G.happy+=5;
+  if(hasBuilding('forge'))    G.army +=10;
+  if(hasBuilding('cathedral'))G.happy+=8;
+  if(hasBuilding('harbour'))  G.gold +=12;
+  if(hasBuilding('palace'))   {G.gold+=3;G.food+=3;G.army+=3;G.happy+=3;G.pop+=2;}
+  // Natural decay
+  G.food  -=Math.ceil(G.pop*.03);   // population eats food
+  G.gold  -=Math.ceil(G.army*.02);  // army costs gold
+  G.happy -=1;                       // happiness naturally decays without effort
+  // Population growth
+  if(G.food>60&&G.happy>50) G.pop+=Math.floor(Math.random()*3);
+  // Gold from trade (small baseline)
+  G.gold+=3;
 }
-function lightenHex(hex,pct){
-  const n=parseInt(hex.replace('#',''),16);
-  const f=1+pct/100;
-  return `rgb(${Math.min(255,Math.floor(((n>>16)&255)*f))},${Math.min(255,Math.floor(((n>>8)&255)*f))},${Math.min(255,Math.floor((n&255)*f))})`;
+
+/* ══════════════════════════════════════════════
+   ACHIEVEMENT SYSTEM
+══════════════════════════════════════════════ */
+let _happyDays=0;
+let _lowGoldRecovered=false;
+let _noWar=true;
+
+function checkAchievements(){
+  if(G.happy>=90)_happyDays++;else _happyDays=0;
+  if(G.gold<=10&&G.day>5)_lowGoldRecovered=true;
+
+  for(const a of ACHIEVEMENTS){
+    if(G.achievements.includes(a.id))continue;
+    let earned=false;
+    if(a.check&&a.check())earned=true;
+    if(a.id==='beloved'&&_happyDays>=10)earned=true;
+    if(a.id==='survivor'&&_lowGoldRecovered&&G.gold>50)earned=true;
+    if(a.id==='comeback'&&_lowGoldRecovered&&G.gold>80)earned=true;
+    if(a.id==='peacekeeper'&&G.day>=TOTAL_DAYS&&_noWar)earned=true;
+    if(earned){
+      G.achievements.push(a.id);
+      showAchievement(a);
+    }
+  }
+}
+
+function showAchievement(a){
+  const el=document.getElementById('ach-popup');
+  document.getElementById('ach-popup-icon').textContent=a.icon;
+  document.getElementById('ach-popup-name').textContent=a.name;
+  document.getElementById('ach-popup-desc').textContent=a.desc;
+  el.classList.remove('hidden');
+  setTimeout(()=>el.classList.add('hidden'),3500);
+}
+
+/* ══════════════════════════════════════════════
+   HUD UPDATER
+══════════════════════════════════════════════ */
+function updateHUD(){
+  clampStats();
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
+  const bar=(id,v)=>{
+    const el=document.getElementById(id);
+    if(el){el.style.width=`${(v/MAX_STAT)*100}%`;el.style.background=getStatColor(v,MAX_STAT);}
+  };
+  set('v-gold',G.gold); bar('bar-gold',G.gold);
+  set('v-food',G.food); bar('bar-food',G.food);
+  set('v-army',G.army); bar('bar-army',G.army);
+  set('v-happy',G.happy);bar('bar-happy',G.happy);
+  set('v-pop',G.pop);   bar('bar-pop',G.pop);
+
+  const season=getSeason();
+  set('day-label',`Day ${G.day}`);
+  set('season-name',season.name);
+  document.getElementById('season-icon').textContent=season.icon;
+
+  // Progress bar
+  const pct=(G.day/TOTAL_DAYS)*100;
+  const pf=document.getElementById('progress-fill');
+  if(pf){pf.style.width=`${pct}%`;pf.style.background=season.color;}
+  set('progress-label',`${season.name} · Year ${Math.ceil(G.day/30)} of 3`);
+
+  // Score
+  G.score=calcScore();
+  set('sb-score',G.score);
+  set('sb-kingdom-name',G.name);
+
+  // Buildings sidebar
+  const bldEl=document.getElementById('sb-buildings');
+  if(bldEl){
+    bldEl.innerHTML=G.buildings.map(b=>`<div class="sb-bld"><span class="sb-bld-icon">${b.icon}</span>${b.name}</div>`).join('');
+  }
+
+  // Achievements
+  const achEl=document.getElementById('ach-list');
+  if(achEl){
+    achEl.innerHTML=ACHIEVEMENTS.map(a=>{
+      const earned=G.achievements.includes(a.id)||G.all_achievements?.includes(a.id);
+      return`<div class="ach-item${earned?'':' locked'}"><span class="ach-icon">${a.icon}</span><span class="ach-name">${a.name}</span></div>`;
+    }).join('');
+  }
+}
+
+/* ══════════════════════════════════════════════
+   EVENT ENGINE
+══════════════════════════════════════════════ */
+let currentEvent=null;
+
+function pickEvent(){
+  const season=getSeason();
+  // Filter valid events
+  let pool=EVENTS.filter(e=>{
+    if(G.events_seen.includes(e.id)&&e.weight<8)return false; // don't repeat rare events
+    if(e.minDay>G.day||e.maxDay<G.day)return false;
+    if(e.season!==-1&&e.season!==season.idx)return false;
+    return true;
+  });
+  if(!pool.length)pool=EVENTS.filter(e=>e.minDay<=G.day&&e.maxDay>=G.day);
+  if(!pool.length)return null;
+  // Weighted random
+  const total=pool.reduce((s,e)=>s+e.weight,0);
+  let r=Math.random()*total;
+  for(const e of pool){r-=e.weight;if(r<=0)return e;}
+  return pool[pool.length-1];
+}
+
+function showEvent(ev){
+  currentEvent=ev;
+  G.events_seen.push(ev.id);
+
+  const season=getSeason();
+  const panel=document.getElementById('event-panel');
+  panel.classList.remove('hidden');
+
+  const tag=document.getElementById('ep-season-tag');
+  tag.textContent=season.name.toUpperCase();
+  tag.style.background=season.color;
+
+  document.getElementById('ep-icon').textContent=ev.icon;
+  document.getElementById('ep-title').textContent=ev.title;
+  document.getElementById('ep-body').textContent=ev.body;
+
+  const effEl=document.getElementById('ep-effect');
+  effEl.classList.add('hidden');
+
+  // Build choices
+  const choicesEl=document.getElementById('ep-choices');
+  choicesEl.innerHTML='';
+  ev.choices.forEach((c,i)=>{
+    // Check requirements
+    if(c.requires&&!hasBuilding(c.requires)){
+      const btn=document.createElement('button');
+      btn.className='choice-btn';
+      btn.style.opacity='.35';btn.disabled=true;
+      btn.innerHTML=`<span class="choice-main">${c.text}</span><span class="choice-effect">${c.effect}</span><span class="choice-risk">🔒 ${c.requireText||'Requirement not met'}</span>`;
+      choicesEl.appendChild(btn);
+      return;
+    }
+    const btn=document.createElement('button');
+    btn.className=`choice-btn${c.good?' good':c.bad?' bad':c.risky?' risky':''}`;
+    btn.innerHTML=`<span class="choice-main">${c.text}</span>
+      <span class="choice-effect">${c.effect}</span>
+      ${c.risk?`<span class="choice-risk">⚠ ${c.risk}</span>`:''}`;
+    btn.addEventListener('click',()=>resolveChoice(ev,c));
+    choicesEl.appendChild(btn);
+  });
+
+  document.getElementById('ep-skip').classList.add('hidden');
+}
+
+function resolveChoice(ev,choice){
+  // Apply the effect
+  const before={gold:G.gold,food:G.food,army:G.army,happy:G.happy,pop:G.pop};
+  choice.resolve(G);
+  clampStats();
+
+  // Calculate actual changes
+  const changes=[
+    {key:'gold',icon:'⚜',label:'Gold'},
+    {key:'food',icon:'🌾',label:'Food'},
+    {key:'army',icon:'⚔',label:'Army'},
+    {key:'happy',icon:'❤',label:'Happiness'},
+    {key:'pop',icon:'👥',label:'Population'},
+  ].filter(s=>Math.abs(G[s.key]-before[s.key])>0);
+
+  // Record history
+  G.history.push({day:G.day,event:ev.title,choice:choice.text,icon:choice.icon||'📜'});
+
+  // Show outcome
+  showOutcome(choice,changes);
+
+  // Hide event panel
+  document.getElementById('event-panel').classList.add('hidden');
+}
+
+function showOutcome(choice,changes){
+  const panel=document.getElementById('outcome-panel');
+  panel.classList.remove('hidden');
+
+  document.getElementById('op-icon').textContent=choice.icon||'📜';
+  document.getElementById('op-title').textContent=choice.good?'A wise decision!':choice.bad?'A costly mistake...':'The deed is done.';
+  document.getElementById('op-body').textContent=choice.outcome||'Your decision has been made.';
+
+  const effEl=document.getElementById('op-effects');
+  effEl.innerHTML=changes.map(c=>{
+    const diff=G[c.key]-Math.max(0,G[c.key]); // this gets overwritten
+    const before_val=G[c.key]-(G[c.key]-G[c.key]); // unused
+    return '';
+  }).join('');
+
+  // Calculate changes properly
+  effEl.innerHTML='';
+  if(changes.length===0){
+    effEl.innerHTML='<div class="effect-chip effect-neu">No immediate change</div>';
+  }
+
+  updateHUD();
+  checkAchievements();
+
+  // Addiction mechanic: show near-miss warning
+  if(G.gold<15||G.food<10||G.happy<15){
+    setTimeout(()=>toast('⚠️ Warning: Your kingdom is in danger!'),800);
+  }
+}
+
+function advanceDay(){
+  // Move to next event
+  document.getElementById('outcome-panel').classList.add('hidden');
+
+  // Apply daily income
+  applyDailyIncome();
+  G.day++;
+
+  // Check for game over
+  if(checkGameOver())return;
+
+  // Check for victory
+  if(G.day>TOTAL_DAYS){
+    showVictory();return;
+  }
+
+  // Save
+  Save.save();
+  updateHUD();
+
+  // Pick and show next event
+  const ev=pickEvent();
+  if(ev){showEvent(ev);}
+  else{
+    // Rest day — small recovery
+    G.happy+=3;G.gold+=2;
+    clampStats();updateHUD();
+    showRestDay();
+  }
+}
+
+function showRestDay(){
+  const panel=document.getElementById('event-panel');
+  panel.classList.remove('hidden');
+  document.getElementById('ep-icon').textContent='🌅';
+  document.getElementById('ep-title').textContent='A Quiet Day';
+  document.getElementById('ep-body').textContent='The kingdom is at peace today. Your people go about their lives. A rare moment of calm.';
+  document.getElementById('ep-choices').innerHTML='';
+  document.getElementById('ep-skip').classList.remove('hidden');
+}
+
+function checkGameOver(){
+  if(G.gold<=0&&G.day>5){
+    endGame('bankruptcy','Your treasury is empty. Creditors seize your palace. Your kingdom dissolves into chaos.');
+    return true;
+  }
+  if(G.food<=0&&G.pop>10){
+    endGame('famine','Famine sweeps the kingdom. Without food, your people scatter to the winds.');
+    return true;
+  }
+  if(G.happy<=0){
+    endGame('revolt','Your people rise in revolt. The palace is stormed. Your reign ends in flames.');
+    return true;
+  }
+  if(G.army<=0&&G.day>30){
+    endGame('conquest','With no army to defend them, your borders collapse. Rivals carve up your kingdom.');
+    return true;
+  }
+  return false;
+}
+
+function endGame(reason,msg){
+  G.score=calcScore();
+  G.total_runs++;
+  Save.save();
+  Save.clear(); // Remove active save
+
+  document.getElementById('game').classList.add('hidden');
+
+  const screen=document.getElementById('gameover');
+  screen.classList.remove('hidden');
+  document.getElementById('go-reason').textContent=msg;
+  document.getElementById('go-score-big').textContent=`Legacy Score: ${G.score}`;
+  document.getElementById('go-stats').innerHTML=
+    `<div class="go-stat"><span>Reign Length</span><span>Day ${G.day}</span></div>
+     <div class="go-stat"><span>Gold</span><span>${G.gold}</span></div>
+     <div class="go-stat"><span>Population</span><span>${G.pop}</span></div>
+     <div class="go-stat"><span>Buildings</span><span>${G.buildings.length}</span></div>
+     <div class="go-stat"><span>Achievements</span><span>${G.achievements.length}/${ACHIEVEMENTS.length}</span></div>`;
+
+  const meta=Save.getMeta();
+  const best=Math.max(meta.best_score||0,G.score);
+  if(G.score>=best){
+    document.getElementById('go-title').textContent='A Valiant Attempt — New Record!';
+  }
+}
+
+function showVictory(){
+  G.score=calcScore();
+  G.total_runs++;
+  const a=ACHIEVEMENTS.find(a=>a.id==='first_win');
+  if(a&&!G.achievements.includes(a.id)){G.achievements.push(a.id);}
+  Save.save();Save.clear();
+
+  document.getElementById('game').classList.add('hidden');
+  const screen=document.getElementById('victory');
+  screen.classList.remove('hidden');
+
+  const title=G.score>600?'A Legendary Reign!':G.score>400?'A Great Ruler':' A Worthy Ruler';
+  document.getElementById('vic-title').textContent=title;
+  document.getElementById('vic-body').textContent=`${G.name} will be remembered for generations. Historians will debate the secrets of your success. The people built statues in your honour.`;
+  document.getElementById('vic-score-big').textContent=`Legacy Score: ${G.score}`;
+  document.getElementById('vic-stats').innerHTML=
+    `<div class="go-stat"><span>Reign</span><span>${TOTAL_DAYS} days — COMPLETE</span></div>
+     <div class="go-stat"><span>Final Gold</span><span>${G.gold}</span></div>
+     <div class="go-stat"><span>Final Population</span><span>${G.pop}</span></div>
+     <div class="go-stat"><span>Buildings</span><span>${G.buildings.length}</span></div>
+     <div class="go-stat"><span>Achievements</span><span>${G.achievements.length}/${ACHIEVEMENTS.length}</span></div>`;
+}
+
+/* ══════════════════════════════════════════════
+   TOAST
+══════════════════════════════════════════════ */
+let _toastTimer=null;
+function toast(msg,dur){
+  dur=dur||2500;
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.classList.remove('hidden');
+  clearTimeout(_toastTimer);
+  _toastTimer=setTimeout(()=>el.classList.add('hidden'),dur);
+}
+
+/* ══════════════════════════════════════════════
+   STREAK SYSTEM
+══════════════════════════════════════════════ */
+function checkStreak(){
+  const meta=Save.getMeta();
+  const today=new Date().toDateString();
+  const last=meta.last_played;
+  const yesterday=new Date(Date.now()-86400000).toDateString();
+
+  if(last===today){
+    // Same day — streak intact
+    G.streak=meta.streak||1;
+  }else if(last===yesterday){
+    // Consecutive day — increment
+    G.streak=(meta.streak||0)+1;
+    if(G.streak>=2){showStreakBanner(G.streak);}
+  }else{
+    // Streak broken
+    G.streak=1;
+  }
+}
+
+function showStreakBanner(n){
+  const el=document.getElementById('streak-banner');
+  document.getElementById('streak-banner-text').textContent=`${n} day streak! +10 Gold bonus`;
+  el.classList.remove('hidden');
+  G.gold+=10;
+  setTimeout(()=>el.classList.add('hidden'),3000);
 }
 
 /* ══════════════════════════════════════════════
    MAIN GAME CONTROLLER
 ══════════════════════════════════════════════ */
-const GAME={
-  canvas:null,
-  empireName:'Your Empire',
-  empireColor:'#4a90d9',
-  playerRes:{gold:500,food:200,prod:100},
-  selGroup:null,    // selected group
-  selHex:null,      // selected hex {q,r}
-  moveRange:[],
-  attackRange:[],
-  tick:0,
-  lastT:0,
-  frid:null,
-  menuOpen:false,
-  splitCount:2,
-  battleLog:[],
-  MAX_LOG:8,
+function startNewGame(){
+  // Reset state
+  Object.assign(G,{
+    gold:100,food:80,army:20,happy:75,pop:50,
+    day:1,score:0,
+    name:KINGDOM_NAMES[Math.floor(Math.random()*KINGDOM_NAMES.length)]+' '+['Kingdom','Empire','Realm','Dominion','Crown'][Math.floor(Math.random()*5)],
+    buildings:[],achievements:[],events_seen:[],
+    pending_event:null,history:[],
+  });
 
-  init(){
-    this.canvas=document.getElementById('game-canvas');
-    this.resize();
-    window.addEventListener('resize',()=>this.resize());
+  // Inherit streak from meta
+  const meta=Save.getMeta();
+  G.streak=meta.streak||0;
+  G.total_runs=(meta.total_runs||0);
+  G.all_achievements=meta.all_achievements||[];
 
-    if(!GL.init(this.canvas)){return;}
-    Overlay.init();
-    Input.init(this.canvas);
+  document.getElementById('home').classList.add('hidden');
+  document.getElementById('game').classList.remove('hidden');
+  HomeAnim.stop();
 
-    // Wire all buttons
-    this._wireButtons();
-    HomeAnim.init();
+  const kc=document.getElementById('kingdom-canvas');
+  KingdomCanvas.init(kc);
 
-    // Color picker
-    document.querySelectorAll('.cpick').forEach(el=>{
-      el.addEventListener('click',()=>{
-        document.querySelectorAll('.cpick').forEach(c=>c.classList.remove('active'));
-        el.classList.add('active');
-        this.empireColor=el.dataset.col;
-      });
-    });
-  },
+  updateHUD();
+  Save.save();
 
-  resize(){
-    const w=window.innerWidth,h=window.innerHeight;
-    if(this.canvas){this.canvas.width=w;this.canvas.height=h;}
-    GL.resize(w,h);
-    Overlay.resize(w,h);
-  },
+  // First event
+  setTimeout(()=>{
+    const ev=pickEvent();
+    if(ev)showEvent(ev);
+  },600);
+}
 
-  _wireButtons(){
-    // Home screen
-    document.getElementById('btn-start')?.addEventListener('click',()=>this.startNew());
-    document.getElementById('btn-continue')?.addEventListener('click',()=>this.startLoad());
-    // HUD
-    document.getElementById('btn-end-turn')?.addEventListener('click',()=>this.endTurn());
-    document.getElementById('btn-build')?.addEventListener('click',()=>this.openBuild());
-    document.getElementById('btn-upgrade')?.addEventListener('click',()=>this.openUpgrade());
-    document.getElementById('btn-split')?.addEventListener('click',()=>this.openSplit());
-    document.getElementById('btn-save')?.addEventListener('click',()=>Save.save());
-    document.getElementById('btn-menu-open')?.addEventListener('click',()=>this.toggleMenu());
-    document.getElementById('btn-build-close')?.addEventListener('click',()=>document.getElementById('build-menu').classList.add('hidden'));
-    document.getElementById('btn-upgrade-close')?.addEventListener('click',()=>document.getElementById('upgrade-menu').classList.add('hidden'));
-    document.getElementById('btn-split-close')?.addEventListener('click',()=>document.getElementById('split-menu').classList.add('hidden'));
-    document.getElementById('btn-split-confirm')?.addEventListener('click',()=>this.confirmSplit());
-    document.getElementById('btn-save2')?.addEventListener('click',()=>Save.save());
-    document.getElementById('btn-home')?.addEventListener('click',()=>this.goHome());
-    document.getElementById('btn-menu-close')?.addEventListener('click',()=>this.toggleMenu());
-    document.getElementById('gi-close')?.addEventListener('click',()=>{this.selGroup=null;this.moveRange=[];this.attackRange=[];document.getElementById('group-info').classList.add('hidden');});
-    document.getElementById('hex-info-close')?.addEventListener('click',()=>document.getElementById('hex-info').classList.add('hidden'));
-    document.getElementById('btn-gameover-home')?.addEventListener('click',()=>this.goHome());
-    document.getElementById('btn-victory-home')?.addEventListener('click',()=>this.goHome());
-    // Split count buttons
-    document.getElementById('sc-2')?.addEventListener('click',()=>this.setSplitCount(2));
-    document.getElementById('sc-3')?.addEventListener('click',()=>this.setSplitCount(3));
-    // D-pad
-    const dpan=(id,dq,dr)=>{
-      const el=document.getElementById(id);if(!el)return;
-      let held=null;
-      const step=()=>{Cam.x-=dq*HEX_SIZE*.6;Cam.y-=dr*HEX_SIZE*.6*VTILT;};
-      el.addEventListener('click',step);
-      el.addEventListener('touchstart',(e)=>{e.preventDefault();step();held=setInterval(step,80);},{passive:false});
-      el.addEventListener('touchend',(e)=>{e.preventDefault();clearInterval(held);},{passive:false});
-      el.addEventListener('mousedown',()=>{step();held=setInterval(step,80);});
-      el.addEventListener('mouseup',()=>clearInterval(held));
-      el.addEventListener('mouseleave',()=>clearInterval(held));
-    };
-    dpan('dp-u', 0,-1);dpan('dp-d', 0, 1);dpan('dp-l',-1, 0);dpan('dp-r', 1, 0);
-    document.getElementById('btn-zi')?.addEventListener('click',()=>Input.doZoom(1.2,this.canvas.width/2,this.canvas.height/2));
-    document.getElementById('btn-zo')?.addEventListener('click',()=>Input.doZoom(.82,this.canvas.width/2,this.canvas.height/2));
-    document.getElementById('btn-zr')?.addEventListener('click',()=>this.resetCam());
-  },
+function continueGame(){
+  if(!Save.load()){
+    toast('No saved kingdom found. Start a new game!');
+    const b=document.getElementById('btn-new');
+    b.style.boxShadow='0 0 0 3px #f5c842';
+    setTimeout(()=>b.style.boxShadow='',2000);
+    return;
+  }
 
-  startNew(){
-    const nameEl=document.getElementById('empire-name');
-    this.empireName=(nameEl?.value?.trim())||'Your Empire';
-    HomeAnim.stop();
-    document.getElementById('home-screen').classList.add('hidden');
-    document.getElementById('hud').classList.remove('hidden');
-    this._newCampaign();
-    if(this.frid)cancelAnimationFrame(this.frid);
-    this.frid=requestAnimationFrame(t=>this._loop(t));
-  },
+  document.getElementById('home').classList.add('hidden');
+  document.getElementById('game').classList.remove('hidden');
+  HomeAnim.stop();
 
-  startLoad(){
-    if(Save.load()){
-      HomeAnim.stop();
-      document.getElementById('home-screen').classList.add('hidden');
-      document.getElementById('hud').classList.remove('hidden');
-      this.updateHUD();this.resetCam();
-      if(this.frid)cancelAnimationFrame(this.frid);
-      this.frid=requestAnimationFrame(t=>this._loop(t));
-      this.toast('📂 Campaign restored!',3000);
-    }else{
-      const b=document.getElementById('btn-start');
-      this.toast('No save found — start a New Campaign');
-      if(b){b.style.boxShadow='0 0 0 3px #f5c842';setTimeout(()=>b.style.boxShadow='',1800);}
+  const kc=document.getElementById('kingdom-canvas');
+  KingdomCanvas.init(kc);
+
+  checkStreak();
+  updateHUD();
+
+  const ev=pickEvent();
+  if(ev)showEvent(ev);
+  else showRestDay();
+}
+
+function goHome(){
+  KingdomCanvas.stop();
+  document.getElementById('game').classList.add('hidden');
+  document.getElementById('gameover').classList.add('hidden');
+  document.getElementById('victory').classList.add('hidden');
+  document.getElementById('pause-menu').classList.add('hidden');
+  document.getElementById('home').classList.remove('hidden');
+  loadHomeScreen();
+  HomeAnim.init();
+}
+
+function loadHomeScreen(){
+  const meta=Save.getMeta();
+  const hasSave=!!localStorage.getItem(SAVE_KEY);
+
+  // Streak
+  const streak=meta.streak||0;
+  if(streak>=2){
+    document.getElementById('home-streak').classList.remove('hidden');
+    document.getElementById('streak-text').textContent=`${streak} day streak!`;
+  }
+
+  // Records
+  if(meta.total_runs>0){
+    document.getElementById('home-records').classList.remove('hidden');
+    document.getElementById('rec-best').textContent=meta.best_score||0;
+    document.getElementById('rec-runs').textContent=meta.total_runs||0;
+  }
+
+  // Continue button
+  const cont=document.getElementById('btn-continue');
+  cont.style.opacity=hasSave?'1':'0.4';
+}
+
+/* ══════════════════════════════════════════════
+   WIRE BUTTONS
+══════════════════════════════════════════════ */
+function wireButtons(){
+  document.getElementById('btn-new')      ?.addEventListener('click',startNewGame);
+  document.getElementById('btn-continue') ?.addEventListener('click',continueGame);
+  document.getElementById('btn-next-event')?.addEventListener('click',advanceDay);
+  document.getElementById('btn-skip')     ?.addEventListener('click',()=>{
+    document.getElementById('event-panel').classList.add('hidden');
+    advanceDay();
+  });
+  document.getElementById('btn-pause')    ?.addEventListener('click',()=>{
+    document.getElementById('pause-menu').classList.remove('hidden');
+    document.getElementById('pm-kingdom').textContent=G.name+' · Day '+G.day;
+  });
+  document.getElementById('btn-resume')   ?.addEventListener('click',()=>document.getElementById('pause-menu').classList.add('hidden'));
+  document.getElementById('btn-save-manual')?.addEventListener('click',()=>{Save.save();toast('💾 Kingdom saved!');});
+  document.getElementById('btn-abandon')  ?.addEventListener('click',()=>{
+    if(confirm('Abandon this kingdom? This cannot be undone.')){
+      Save.clear();goHome();
     }
-  },
-
-  _newCampaign(){
-    gidCounter=0;
-    // Set up factions
-    const aiNames=AI_NAMES.sort(()=>Math.random()-.5);
-    World.factions=[
-      {name:this.empireName,  color:this.empireColor, isPlayer:true, alive:true},
-      {name:aiNames[0],       color:FC[1],            isPlayer:false,alive:true},
-      {name:aiNames[1],       color:FC[2],            isPlayer:false,alive:true},
-      {name:aiNames[2],       color:FC[3],            isPlayer:false,alive:true},
-    ];
-    World.playerFaction=0;
-    World.towerHP=500;World.towerMaxHP=500;
-    World.turn=1;
-    World.deliveries=[];
-    World.buildings=[];
-    World.groups=[];
-    this.playerRes={gold:500,food:200,prod:100};
-
-    // Generate land-only world
-    World.generate();
-
-    // Place main tower, get position
-    const towerPos=World.placeMainTower();
-    World.placeAICapitals();
-
-    // Player starts with 2 groups of 10 troops near the tower
-    const g1=makeGroup(0,towerPos.q-1,towerPos.r,'10','Iron Guard');
-    const g2=makeGroup(0,towerPos.q+1,towerPos.r,'10','Shield Wall');
-    g1.troops=10;g2.troops=10;
-    World.groups.push(g1,g2);
-
-    // AI groups (3 each, 15 troops)
-    for(let f=1;f<4;f++){
-      const cap=World.buildings.find(b=>b.faction===f&&b.type===B.MAIN_TOWER);
-      if(!cap)continue;
-      const names=['Vanguard','Flankers','Rear Guard'];
-      for(let k=0;k<3;k++){
-        const g=makeGroup(f,cap.q+(k-1),cap.r+1,15,names[k]);
-        World.groups.push(g);
-      }
-    }
-
-    // Camera: look at main tower
-    this.resetCam();
-    Cam.centreOn(towerPos.q,towerPos.r,0);
-
-    this.updateHUD();
-    this.blogAdd(`${this.empireName} rises! Defend your Main Tower!`,'v');
-    this.blogAdd('2 groups of 10 troops deployed. End turn to begin.','i');
-  },
-
-  resetCam(){
-    const tower=World.buildings.find(b=>b.type===B.MAIN_TOWER&&b.faction===World.playerFaction);
-    Cam.zoom=1;
-    if(tower)Cam.centreOn(tower.q,tower.r,0);
-    else{Cam.x=0;Cam.y=0;}
-  },
-
-  _loop(ts){
-    this.frid=requestAnimationFrame(t=>this._loop(t));
-    if(ts-this.lastT<1000/FPS)return;
-    this.lastT=ts;
-    this.tick+=0.016;
-    this._render();
-  },
-
-  _render(){
-    const gl=GL.gl;
-    if(!gl)return;
-    const W=this.canvas.width,H=this.canvas.height;
-    // Sky background (use CSS dark gradient via clear)
-    GL.clear(.04,.06,.10);
-
-    // Build vertex array
-    const verts=[];
-    for(let r=0;r<GRID_H;r++){
-      for(let q=0;q<GRID_W;q++){
-        const cell=World.get(q,r);if(!cell)continue;
-        const s=Cam.hexToScreen(q,r,cell.z);
-        if(!Cam.visible(s.sx,s.sy))continue;
-
-        // Is this hex in move/attack range?
-        const inMove=this.moveRange.some(h=>h.q===q&&h.r===r);
-        const inAtk =this.attackRange.some(h=>h.q===q&&h.r===r);
-        const isSel =(this.selHex&&this.selHex.q===q&&this.selHex.r===r)?1:0;
-
-        buildHexVerts(verts,s.sx,s.sy,cell.z,cell.t,cell.faction>=0?cell.faction:-1,isSel,this.tick);
-      }
-    }
-    if(verts.length)GL.flush(new Float32Array(verts));
-
-    // Overlay (Canvas 2D for text + icons)
-    Overlay.clear();
-
-    // Draw move/attack ranges
-    if(this.moveRange.length)  Overlay.drawMoveRange(this.moveRange);
-    if(this.attackRange.length)Overlay.drawAttackRange(this.attackRange);
-
-    // Draw buildings
-    for(const bld of World.buildings){
-      const s=Cam.hexToScreen(bld.q,bld.r,0);
-      if(Cam.visible(s.sx,s.sy))
-        Overlay.drawBuilding(s.sx,s.sy,bld.type,bld.faction,bld.hp,bld.maxHP);
-    }
-
-    // Draw groups (sorted back to front)
-    const visGroups=World.groups.filter(g=>g.alive&&g.troops>0);
-    visGroups.sort((a,b)=>(a.q+a.r)-(b.q+b.r));
-    for(const g of visGroups){
-      const s=Cam.hexToScreen(g.q,g.r,World.get(g.q,g.r)?.z||0);
-      if(Cam.visible(s.sx,s.sy))Overlay.drawGroup(s.sx,s.sy,g);
-    }
-  },
-
-  onTap(sx,sy){
-    const{q,r}=Cam.screenToHex(sx,sy);
-    const cell=World.get(q,r);
-    if(!cell)return;
-
-    // Check if tap is on a group
-    const grp=World.groups.find(g=>g.alive&&g.troops>0&&g.q===q&&g.r===r);
-
-    if(this.selGroup&&this.selGroup.faction===World.playerFaction){
-      // If tapping enemy group in attack range → attack
-      if(grp&&grp.faction!==World.playerFaction&&this.attackRange.some(h=>h.q===q&&h.r===r)){
-        if(!this.selGroup.attacked){
-          Combat.resolve(this.selGroup,grp,World.playerFaction);
-          this.selGroup.attacked=true;
-          this.selGroup.moved=true;
-          this.clearSel();
-          this.updateHUD();
-          this.checkVictory();
-          return;
-        }else{this.toast('This group already attacked this turn.');return;}
-      }
-      // If tapping move range → move
-      if(this.moveRange.some(h=>h.q===q&&h.r===r)&&!this.selGroup.moved){
-        // Check no friendly group already there
-        const occ=World.groups.find(g=>g.alive&&g.q===q&&g.r===r&&g.faction===World.playerFaction);
-        if(occ){this.toast('Another group is already there.');return;}
-        this.selGroup.q=q;this.selGroup.r=r;
-        this.selGroup.moved=true;
-        // Recalc ranges
-        this.moveRange=[];
-        this.attackRange=this._getAttackTargets(this.selGroup);
-        this.updateGroupInfo(this.selGroup);
-        return;
-      }
-    }
-
-    // Select player group
-    if(grp&&grp.faction===World.playerFaction){
-      this.selGroup=grp;
-      this.selHex={q,r};
-      if(!grp.moved){
-        this.moveRange=getMoveRange(q,r,3);
-      }else{this.moveRange=[];}
-      this.attackRange=this._getAttackTargets(grp);
-      this.updateGroupInfo(grp);
-      return;
-    }
-
-    // Tap enemy group — show info
-    if(grp&&grp.faction!==World.playerFaction){
-      this.selGroup=null;this.moveRange=[];this.attackRange=[];
-      document.getElementById('group-info').classList.add('hidden');
-      this.showHexInfo(q,r,cell,grp);
-      return;
-    }
-
-    // Tap empty hex
-    this.selGroup=null;this.moveRange=[];this.attackRange=[];
-    document.getElementById('group-info').classList.add('hidden');
-    this.selHex={q,r};
-    this.showHexInfo(q,r,cell,null);
-  },
-
-  _getAttackTargets(grp){
-    const nbs=hexNeighbours(grp.q,grp.r);
-    return nbs.filter(h=>{
-      const eg=World.groups.find(g=>g.alive&&g.q===h.q&&g.r===h.r&&g.faction!==grp.faction);
-      return !!eg;
-    });
-  },
-
-  clearSel(){
-    this.selGroup=null;this.selHex=null;this.moveRange=[];this.attackRange=[];
-    document.getElementById('group-info').classList.add('hidden');
-  },
-
-  updateGroupInfo(g){
-    document.getElementById('gi-name').textContent=g.name;
-    document.getElementById('gi-stats').textContent=`Troops: ${g.troops} · Morale: ${g.morale}%${g.moved?' · (Moved)':''}`;
-    document.getElementById('gi-equip').textContent=`Weapon: ${g.weapon} · Armor: ${g.armor}`;
-    document.getElementById('group-info').classList.remove('hidden');
-  },
-
-  showHexInfo(q,r,cell,grp){
-    const bld=World.buildings.find(b=>b.q===q&&b.r===r);
-    let body=`<b>Terrain:</b> ${TNAME[cell.t]}<br>`+
-      `<b>Elevation:</b> ${cell.z}<br>`+
-      `<b>Defence bonus:</b> +${TDEF[cell.t]}%<br>`+
-      `<b>Move cost:</b> ${(1/TMOV[cell.t]).toFixed(1)}`;
-    if(bld)body+=`<br><b>Building:</b> ${BNAME[bld.type]}`;
-    if(grp)body+=`<br><b>Enemy group:</b> ${grp.name} (${grp.troops} troops, ${World.factions[grp.faction]?.name})`;
-    document.getElementById('hex-info-name').textContent=`Hex (${q},${r})`;
-    document.getElementById('hex-info-body').innerHTML=body;
-    document.getElementById('hex-info').classList.remove('hidden');
-  },
-
-  endTurn(){
-    // Collect from buildings
-    for(const bld of World.buildings){
-      if(bld.faction===World.playerFaction){
-        const cat=BUILD_CATALOG.find(b=>b.id===bld.type);
-        if(cat?.troopsPerTurn){
-          // Add troops to nearest player group
-          const pg=World.groups.filter(g=>g.alive&&g.faction===World.playerFaction&&g.troops>0);
-          if(pg.length){
-            pg.sort((a,b)=>hexDistance(a.q,a.r,bld.q,bld.r)-hexDistance(b.q,b.r,bld.q,bld.r));
-            pg[0].troops+=cat.troopsPerTurn;
-            this.blogAdd(`+${cat.troopsPerTurn} troops from ${BNAME[bld.type]} → ${pg[0].name}`,'i');
-          }
-        }
-      }
-    }
-
-    // Process deliveries
-    World.deliveries=World.deliveries.map(d=>({...d,turns:d.turns-1}));
-    const arrived=World.deliveries.filter(d=>d.turns<=0);
-    for(const d of arrived){
-      const pg=World.groups.filter(g=>g.alive&&g.faction===World.playerFaction&&g.troops>0);
-      if(d.stat.atkBonus)  this.blogAdd(`📦 ${d.name} arrived! +${d.stat.atkBonus}% attack for all groups`,'v');
-      if(d.stat.defBonus)  this.blogAdd(`📦 ${d.name} arrived! +${d.stat.defBonus}% defence for all groups`,'v');
-      if(d.stat.siegeBonus)this.blogAdd(`📦 ${d.name} arrived! +${d.stat.siegeBonus}% siege attack`,'v');
-      // Apply globally (simplified — apply to all player groups)
-      for(const g of pg){
-        if(d.stat.atkBonus) g.atkBonus=(g.atkBonus||0)+d.stat.atkBonus;
-        if(d.stat.defBonus) g.defBonus=(g.defBonus||0)+d.stat.defBonus;
-        if(d.stat.siegeBonus)g.siegeBonus=(g.siegeBonus||0)+d.stat.siegeBonus;
-        if(d.stat.moveMalus)g.moveMalus=(g.moveMalus||0)+d.stat.moveMalus;
-        // Update display name
-        g.weapon=d.weapon||g.weapon;
-        g.armor=d.armor||g.armor;
-      }
-    }
-    World.deliveries=World.deliveries.filter(d=>d.turns>0);
-
-    // AI turns
-    for(let f=1;f<World.factions.length;f++){
-      if(World.factions[f].alive)AI.runTurn(f);
-    }
-
-    // Check AI victories (did all 3 AI towers fall?)
-    this._checkAIAlive();
-
-    // Reset group move flags
-    for(const g of World.groups){g.moved=false;g.attacked=false;}
-
-    World.turn++;
-    this.updateHUD();
-    this.checkVictory();
-    this.checkGameOver();
-    this.blogAdd(`─── Turn ${World.turn} ───`,'i');
-    this.toast(`⏳ Turn ${World.turn}`);
-  },
-
-  _checkAIAlive(){
-    for(let f=1;f<World.factions.length;f++){
-      if(!World.factions[f].alive)continue;
-      const tower=World.buildings.find(b=>b.type===B.MAIN_TOWER&&b.faction===f);
-      if(!tower||tower.hp<=0){
-        World.factions[f].alive=false;
-        this.blogAdd(`${World.factions[f].name} has been defeated!`,'v');
-      }
-    }
-  },
-
-  checkGameOver(){
-    if(World.towerHP<=0){
-      cancelAnimationFrame(this.frid);
-      document.getElementById('hud').classList.add('hidden');
-      document.getElementById('gameover-screen').classList.remove('hidden');
-    }
-  },
-
-  checkVictory(){
-    const aiAlive=World.factions.slice(1).some(f=>f.alive);
-    if(!aiAlive){
-      cancelAnimationFrame(this.frid);
-      document.getElementById('hud').classList.add('hidden');
-      document.getElementById('victory-screen').classList.remove('hidden');
-    }
-  },
-
-  updateHUD(){
-    const r=this.playerRes;
-    document.getElementById('v-gold').textContent=r.gold;
-    document.getElementById('v-food').textContent=r.food;
-    document.getElementById('v-prod').textContent=r.prod;
-    document.getElementById('v-turn').textContent=World.turn;
-    document.getElementById('empire-label').textContent=this.empireName;
-    document.getElementById('empire-dot').style.background=this.empireColor;
-    // Tower HP
-    const pct=Math.max(0,World.towerHP/World.towerMaxHP);
-    document.getElementById('v-tower-hp').textContent=World.towerHP;
-    document.getElementById('tower-hp-fill').style.width=`${pct*100}%`;
-    const col=pct>.6?'linear-gradient(90deg,#2a8a2a,#4ad95c)':pct>.3?'linear-gradient(90deg,#8a7a1a,#f5c842)':'linear-gradient(90deg,#8a1a1a,#d94a4a)';
-    document.getElementById('tower-hp-fill').style.background=col;
-    // Delivery bar
-    if(World.deliveries.length>0){
-      const d=World.deliveries[0];
-      document.getElementById('delivery-text').textContent=`📦 ${d.name} arriving in ${d.turns} turn${d.turns!==1?'s':''}`;
-      document.getElementById('delivery-bar').classList.remove('hidden');
-    }else{
-      document.getElementById('delivery-bar').classList.add('hidden');
-    }
-  },
-
-  openBuild(){
-    const list=document.getElementById('build-list');list.innerHTML='';
-    const hexQ=this.selHex?.q, hexR=this.selHex?.r;
-    const cell=hexQ!=null?World.get(hexQ,hexR):null;
-    if(!cell||cell.faction!==World.playerFaction||cell.building!==B.NONE){
-      list.innerHTML='<div style="color:#888;font-size:12px;padding:12px;text-align:center">Select one of YOUR empty hex tiles first.</div>';
-    }else{
-      for(const b of BUILD_CATALOG){
-        const ok=this.playerRes.gold>=b.gold&&this.playerRes.prod>=b.prod;
-        const row=document.createElement('div');
-        row.className='bitem'+(ok?'':' bitem-dis');
-        row.innerHTML=`<div><div class="bi-name">${b.name}</div><div class="bi-desc">${b.desc}</div></div><div><div class="bi-cost">⚜${b.gold} ⚒${b.prod}</div><div class="bi-time">${b.turns} turn${b.turns!==1?'s':''} to build</div></div>`;
-        if(ok){row.addEventListener('click',()=>{
-          this.playerRes.gold-=b.gold;this.playerRes.prod-=b.prod;
-          cell.building=b.id;cell.faction=World.playerFaction;
-          World.buildings.push({q:hexQ,r:hexR,type:b.id,faction:World.playerFaction,hp:b.id===B.MAIN_TOWER?500:200,maxHP:200});
-          this.updateHUD();this.toast(`🏗 ${b.name} construction begun!`);
-          document.getElementById('build-menu').classList.add('hidden');
-        });}
-        list.appendChild(row);
-      }
-    }
-    document.getElementById('build-menu').classList.remove('hidden');
-  },
-
-  openUpgrade(){
-    const list=document.getElementById('upgrade-list');list.innerHTML='';
-    const hasForge=World.buildings.some(b=>b.faction===World.playerFaction&&b.type===B.FORGE);
-    const hasElite=World.buildings.some(b=>b.faction===World.playerFaction&&b.type===B.ELITE_FORGE);
-    for(const u of UPGRADE_CATALOG){
-      const reqMet=(u.req===B.NONE)||(u.req===B.FORGE&&hasForge)||(u.req===B.ELITE_FORGE&&hasElite);
-      const ok=reqMet&&this.playerRes.gold>=u.gold&&this.playerRes.prod>=u.prod;
-      const row=document.createElement('div');
-      row.className='bitem'+(ok?'':' bitem-dis');
-      const reqText=u.req===B.NONE?'':(u.req===B.FORGE?'Req: Forge':'Req: Elite Forge');
-      row.innerHTML=`<div><div class="bi-name">${u.name}</div><div class="bi-desc">${u.desc}${reqText?'<br><i>'+reqText+'</i>':''}</div></div><div><div class="bi-cost">⚜${u.gold} ⚒${u.prod}</div><div class="bi-time">2-turn delivery</div></div>`;
-      if(ok){row.addEventListener('click',()=>{
-        this.playerRes.gold-=u.gold;this.playerRes.prod-=u.prod;
-        World.deliveries.push({...u,turns:2});
-        this.updateHUD();this.toast(`⚒ ${u.name} ordered — arrives in 2 turns!`);
-        document.getElementById('upgrade-menu').classList.add('hidden');
-      });}
-      list.appendChild(row);
-    }
-    document.getElementById('upgrade-menu').classList.remove('hidden');
-  },
-
-  openSplit(){
-    if(!this.selGroup||this.selGroup.faction!==World.playerFaction){
-      this.toast('Select one of your groups first.');return;
-    }
-    if(this.selGroup.troops<4){this.toast('Need at least 4 troops to split.');return;}
-    document.getElementById('split-source-info').textContent=`${this.selGroup.name} has ${this.selGroup.troops} troops`;
-    this.setSplitCount(this.splitCount);
-    document.getElementById('split-menu').classList.remove('hidden');
-  },
-
-  setSplitCount(n){
-    this.splitCount=n;
-    document.querySelectorAll('.sbtn').forEach(b=>b.classList.remove('active'));
-    document.getElementById(`sc-${n}`)?.classList.add('active');
-    this._buildSplitSliders(n);
-  },
-
-  _buildSplitSliders(n){
-    const total=this.selGroup?.troops||0;
-    const per=Math.floor(total/n);
-    const cont=document.getElementById('split-sliders');cont.innerHTML='';
-    for(let i=0;i<n;i++){
-      const row=document.createElement('div');row.className='split-slider-row';
-      const initVal=i<n-1?per:total-per*(n-1);
-      row.innerHTML=`<label>Group ${i+1}</label><input type="range" min="1" max="${total-n+1}" value="${initVal}" data-idx="${i}"><span class="split-slider-val">${initVal} troops</span>`;
-      row.querySelector('input').addEventListener('input',e=>{
-        e.target.nextElementSibling.textContent=`${e.target.value} troops`;
-      });
-      cont.appendChild(row);
-    }
-  },
-
-  confirmSplit(){
-    const g=this.selGroup;if(!g)return;
-    const sliders=[...document.querySelectorAll('#split-sliders input[type=range]')];
-    const counts=sliders.map(s=>parseInt(s.value));
-    const total=counts.reduce((a,b)=>a+b,0);
-    if(total>g.troops){this.toast('Total exceeds troop count!');return;}
-    // Create new groups around the original hex
-    const offsets=[[0,1],[1,0],[-1,1],[0,-1]];
-    for(let i=0;i<counts.length;i++){
-      if(i===0){g.troops=counts[0];g.name=`${g.name}-A`;}
-      else{
-        const off=offsets[(i-1)%offsets.length];
-        const nq=Math.max(0,Math.min(GRID_W-1,g.q+off[0]));
-        const nr=Math.max(0,Math.min(GRID_H-1,g.r+off[1]));
-        const ng=makeGroup(World.playerFaction,nq,nr,counts[i],`${g.name}-${String.fromCharCode(65+i)}`);
-        ng.weapon=g.weapon;ng.armor=g.armor;ng.morale=g.morale;
-        ng.moved=g.moved;ng.attacked=g.attacked;
-        World.groups.push(ng);
-      }
-    }
-    g.troops=counts[0];
-    this.clearSel();
-    this.toast(`✂ Split into ${counts.length} groups!`);
-    document.getElementById('split-menu').classList.add('hidden');
-  },
-
-  toggleMenu(){
-    this.menuOpen=!this.menuOpen;
-    document.getElementById('game-menu').classList.toggle('hidden',!this.menuOpen);
-  },
-
-  goHome(){
-    if(this.frid){cancelAnimationFrame(this.frid);this.frid=null;}
-    document.getElementById('hud').classList.add('hidden');
-    document.getElementById('gameover-screen').classList.add('hidden');
-    document.getElementById('victory-screen').classList.add('hidden');
-    document.getElementById('home-screen').classList.remove('hidden');
-    this.menuOpen=false;document.getElementById('game-menu').classList.add('hidden');
-    HomeAnim.init();
-  },
-
-  toast(msg,dur){
-    dur=dur||2400;const el=document.getElementById('toast');
-    el.textContent=msg;el.classList.remove('hidden');
-    clearTimeout(this._tt);
-    this._tt=setTimeout(()=>el.classList.add('hidden'),dur);
-  },
-
-  blogAdd(msg,cls){
-    this.battleLog.unshift({msg,cls});
-    if(this.battleLog.length>this.MAX_LOG)this.battleLog.pop();
-    const inner=document.getElementById('battle-log-inner');
-    inner.innerHTML=this.battleLog
-      .map(l=>`<div class="blog-line blog-${l.cls}">${l.msg}</div>`)
-      .join('');
-  },
-};
+  });
+  document.getElementById('btn-pm-home')  ?.addEventListener('click',()=>{Save.save();goHome();});
+  document.getElementById('btn-menu')     ?.addEventListener('click',()=>{
+    document.getElementById('pause-menu').classList.remove('hidden');
+    document.getElementById('pm-kingdom').textContent=G.name+' · Day '+G.day;
+  });
+  document.getElementById('btn-go-home')  ?.addEventListener('click',goHome);
+  document.getElementById('btn-vic-home') ?.addEventListener('click',goHome);
+}
 
 /* ══════════════════════════════════════════════
    BOOT
 ══════════════════════════════════════════════ */
-window.GAME=GAME;
+function init(){
+  wireButtons();
+  loadHomeScreen();
+  HomeAnim.init();
+}
+
 if(document.readyState==='loading'){
-  document.addEventListener('DOMContentLoaded',()=>GAME.init());
+  document.addEventListener('DOMContentLoaded',init);
 }else{
-  GAME.init();
+  init();
 }
 
 })();
