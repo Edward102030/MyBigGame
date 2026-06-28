@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Reset Tiny Kingdom</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:#050301;display:flex;align-items:center;justify-content:center;
+    min-height:100vh;font-family:Georgia,serif;}
+  .card{background:rgba(8,5,1,.95);border:1px solid #c8860a;border-radius:12px;
+    padding:40px 32px;max-width:420px;width:88vw;
+    display:flex;flex-direction:column;align-items:center;gap:18px;
+    box-shadow:0 8px 60px rgba(0,0,0,.9);}
+  h1{color:#f5c842;font-size:28px;font-style:italic;text-align:center;}
+  p{color:rgba(232,213,163,.7);font-size:13px;font-family:Courier New,monospace;
+    text-align:center;line-height:1.7;}
+  .btn{padding:14px 28px;border-radius:8px;border:none;cursor:pointer;
+    font-family:Georgia,serif;font-size:16px;font-style:italic;
+    width:100%;transition:filter .12s;}
+  .btn:active{filter:brightness(.85);}
+  .btn-red{background:linear-gradient(155deg,#6a1a0a,#3a0a02);
+    color:#ffb085;border:1px solid rgba(200,80,32,.6);}
+  .btn-blue{background:linear-gradient(155deg,#2a4a7a,#1a2a52);
+    color:#fff;border:1px solid rgba(74,144,217,.6);}
+  #status{font-family:Courier New,monospace;font-size:13px;
+    color:#4ad95c;text-align:center;min-height:20px;}
+</style>
+</head>
+<body>
+<div class="card">
+  <div style="font-size:48px">🗑</div>
+  <h1>Reset Save Data</h1>
+  <p>This will completely erase all Tiny Kingdom save data from this browser, including streaks, scores, and achievements.<br><br>Use this if the game is stuck on the wrong screen.</p>
+  <div id="status"></div>
+  <button class="btn btn-red" id="btn-reset">⚠ Clear All Game Data</button>
+  <button class="btn btn-blue" id="btn-play">▶ Go to Game</button>
+</div>
+<script>
+  document.getElementById('btn-reset').addEventListener('click',function(){
+    let count=0;
+    try{
+      // Delete EVERYTHING in localStorage
+      const keys=[];
+      for(let i=0;i<localStorage.length;i++) keys.push(localStorage.key(i));
+      keys.forEach(k=>{localStorage.removeItem(k);count++;});
+    }catch(e){}
+    // Also try sessionStorage
+    try{sessionStorage.clear();}catch(e){}
+    document.getElementById('status').textContent=
+      count>0?'✓ Cleared '+count+' item(s). Ready to play!':'✓ Already clean. Ready to play!';
+    document.getElementById('btn-reset').style.opacity='0.4';
+    setTimeout(()=>{window.location.href='index.html';},1500);
+  });
+  document.getElementById('btn-play').addEventListener('click',function(){
+    window.location.href='index.html';
+  });
+  // Show what's currently stored
+  try{
+    const keys=[];
+    for(let i=0;i<localStorage.length;i++) keys.push(localStorage.key(i));
+    if(keys.length>0){
+      document.getElementById('status').textContent=
+        'Found '+keys.length+' stored item(s): '+keys.slice(0,3).join(', ')+(keys.length>3?'...':'');
+    }else{
+      document.getElementById('status').textContent='No data stored — you are clean!';
+    }
+  }catch(e){}
+</script>
+</body>
+</html>
