@@ -5,195 +5,184 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
-<title>Realm Conquest</title>
+<title>Tiny Kingdom</title>
 <link rel="stylesheet" href="styles.css"/>
 </head>
 <body>
 
-<!-- ═══════════════════════════════════════
-     HOME SCREEN
-═══════════════════════════════════════ -->
-<div id="home-screen">
-  <canvas id="home-bg"></canvas>
+<!-- ═══════════════════════ HOME ═══════════════════════ -->
+<div id="home">
+  <canvas id="home-canvas"></canvas>
   <div id="home-vignette"></div>
   <div id="home-card">
-    <div id="home-crest">⚔</div>
-    <h1 id="home-title">REALM<span>CONQUEST</span></h1>
-    <p id="home-tagline">A Grand Strategy of War &amp; Empire</p>
-
-    <div class="hform-group">
-      <label class="hform-label">Empire Name</label>
-      <input type="text" id="empire-name" class="hform-input" placeholder="Enter your empire's name..." maxlength="24" autocomplete="off"/>
+    <div id="home-crown">👑</div>
+    <h1 id="home-title">TINY<span>KINGDOM</span></h1>
+    <p id="home-sub">Rule wisely. Survive the seasons. Build a legacy.</p>
+    <div id="home-streak" class="hidden">
+      <span id="streak-fire">🔥</span>
+      <span id="streak-text">3 day streak!</span>
     </div>
-
-    <div class="hform-group">
-      <label class="hform-label">Choose Your Color</label>
-      <div id="color-picker">
-        <div class="cpick active" data-col="#4a90d9" style="background:#4a90d9"></div>
-        <div class="cpick" data-col="#d94a4a" style="background:#d94a4a"></div>
-        <div class="cpick" data-col="#4ad95c" style="background:#4ad95c"></div>
-        <div class="cpick" data-col="#d9c44a" style="background:#d9c44a"></div>
-        <div class="cpick" data-col="#a04ad9" style="background:#a04ad9"></div>
-        <div class="cpick" data-col="#d9784a" style="background:#d9784a"></div>
-      </div>
-    </div>
-
     <div id="home-btns">
-      <button id="btn-start" class="hbtn hbtn-primary">⚔ Begin Campaign</button>
-      <button id="btn-continue" class="hbtn hbtn-secondary">📂 Continue</button>
+      <button id="btn-new" class="hbtn primary">⚔ New Kingdom</button>
+      <button id="btn-continue" class="hbtn secondary">📜 Continue</button>
     </div>
-    <p id="home-hint">Tap tiles to select · Drag to pan · Pinch/scroll to zoom</p>
+    <div id="home-records" class="hidden">
+      <div class="rec-row"><span>Best Reign</span><span id="rec-best">—</span></div>
+      <div class="rec-row"><span>Kingdoms Built</span><span id="rec-runs">0</span></div>
+    </div>
+    <p id="home-hint">2–30 min sessions · Weeks to master · Auto-saves always</p>
   </div>
 </div>
 
-<!-- ═══════════════════════════════════════
-     GAME OVER SCREEN
-═══════════════════════════════════════ -->
-<div id="gameover-screen" class="hidden">
-  <div id="gameover-card">
-    <div id="gameover-icon">🏴</div>
-    <h2 id="gameover-title">Your Empire Has Fallen</h2>
-    <p id="gameover-msg">Your Main Tower was destroyed. The realm is lost.</p>
-    <button id="btn-gameover-home" class="hbtn hbtn-primary">Return to Home</button>
-  </div>
-</div>
+<!-- ═══════════════════════ GAME ═══════════════════════ -->
+<div id="game" class="hidden">
 
-<!-- ═══════════════════════════════════════
-     VICTORY SCREEN
-═══════════════════════════════════════ -->
-<div id="victory-screen" class="hidden">
-  <div id="victory-card">
-    <div id="victory-icon">👑</div>
-    <h2 id="victory-title">Victory!</h2>
-    <p id="victory-msg">All enemies have been vanquished. You reign supreme.</p>
-    <button id="btn-victory-home" class="hbtn hbtn-primary">Return to Home</button>
-  </div>
-</div>
+  <!-- Kingdom canvas -->
+  <canvas id="kingdom-canvas"></canvas>
 
-<!-- ═══════════════════════════════════════
-     WEBGL CANVAS
-═══════════════════════════════════════ -->
-<canvas id="game-canvas"></canvas>
-
-<!-- ═══════════════════════════════════════
-     HUD
-═══════════════════════════════════════ -->
-<div id="hud" class="hidden">
-
-  <!-- Top bar -->
+  <!-- Top HUD -->
   <div id="hud-top">
-    <div id="empire-badge">
-      <span id="empire-dot"></span>
-      <span id="empire-label">Empire</span>
+    <div id="day-badge">
+      <span id="season-icon">🌱</span>
+      <span id="day-label">Day 1</span>
+      <span id="season-name">Spring</span>
     </div>
-    <div class="res-chip"><span class="ri">⚜</span><span class="rl">GOLD</span><span class="rv" id="v-gold">500</span></div>
-    <div class="res-chip"><span class="ri">🌾</span><span class="rl">FOOD</span><span class="rv" id="v-food">200</span></div>
-    <div class="res-chip"><span class="ri">⚒</span><span class="rl">PROD</span><span class="rv" id="v-prod">100</span></div>
-    <div class="res-chip"><span class="ri">⏳</span><span class="rl">TURN</span><span class="rv" id="v-turn">1</span></div>
-    <div id="tower-hp-wrap">
-      <span class="rl">TOWER HP</span>
-      <div id="tower-hp-bar"><div id="tower-hp-fill"></div></div>
-      <span class="rv" id="v-tower-hp">500</span>
-    </div>
-  </div>
-
-  <!-- Delivery queue ticker -->
-  <div id="delivery-bar" class="hidden">
-    <span id="delivery-text">📦 No deliveries pending</span>
-  </div>
-
-  <!-- Bottom action bar -->
-  <div id="hud-bot">
-    <button class="gbtn end-btn" id="btn-end-turn">⚔ END TURN</button>
-    <button class="gbtn" id="btn-build">🏗 BUILD</button>
-    <button class="gbtn" id="btn-upgrade">⚒ UPGRADE</button>
-    <button class="gbtn" id="btn-split">✂ SPLIT</button>
-    <button class="gbtn sec" id="btn-save">💾</button>
-    <button class="gbtn sec" id="btn-menu-open">☰</button>
-  </div>
-
-  <!-- Selected group info bar -->
-  <div id="group-info" class="hidden">
-    <div id="gi-name">Group Alpha</div>
-    <div id="gi-stats">Troops: 10 · Morale: 100%</div>
-    <div id="gi-equip">Weapon: Sword · Armor: Leather</div>
-    <button id="gi-close">✕</button>
-  </div>
-
-  <!-- D-Pad -->
-  <div id="dpad">
-    <div></div>
-    <button class="dpbtn" id="dp-u">▲</button>
-    <div></div>
-    <button class="dpbtn" id="dp-l">◀</button>
-    <div class="dp-mid"></div>
-    <button class="dpbtn" id="dp-r">▶</button>
-    <div></div>
-    <button class="dpbtn" id="dp-d">▼</button>
-    <div></div>
-  </div>
-
-  <!-- Zoom buttons -->
-  <div id="zoom-btns">
-    <button class="zbtn" id="btn-zi">+</button>
-    <button class="zbtn" id="btn-zo">−</button>
-    <button class="zbtn zbtn-reset" id="btn-zr">⌖</button>
-  </div>
-
-  <!-- Tile / hex info panel -->
-  <div id="hex-info" class="hidden">
-    <button id="hex-info-close">✕</button>
-    <div id="hex-info-name">Plains</div>
-    <div id="hex-info-body">—</div>
-  </div>
-
-  <!-- BUILD MENU -->
-  <div id="build-menu" class="overlay hidden">
-    <div class="ov-hdr">🏗 Construct Building</div>
-    <div class="ov-scroll" id="build-list"></div>
-    <button class="gbtn sec" id="btn-build-close">✕ Close</button>
-  </div>
-
-  <!-- UPGRADE STORE -->
-  <div id="upgrade-menu" class="overlay hidden">
-    <div class="ov-hdr">⚒ Upgrade Store</div>
-    <div class="ov-scroll" id="upgrade-list"></div>
-    <button class="gbtn sec" id="btn-upgrade-close">✕ Close</button>
-  </div>
-
-  <!-- SPLIT MENU -->
-  <div id="split-menu" class="overlay hidden">
-    <div class="ov-hdr">✂ Split Group</div>
-    <div id="split-body">
-      <p id="split-source-info">Group has 0 troops</p>
-      <label class="hform-label">Split into how many groups?</label>
-      <div id="split-count-btns">
-        <button class="sbtn active" id="sc-2">2 Groups</button>
-        <button class="sbtn" id="sc-3">3 Groups</button>
+    <div class="stat-chip" id="chip-gold">
+      <span class="sc-icon">⚜</span>
+      <div class="sc-body">
+        <span class="sc-val" id="v-gold">100</span>
+        <div class="sc-bar"><div class="sc-fill" id="bar-gold"></div></div>
       </div>
-      <div id="split-sliders"></div>
-      <button class="gbtn" id="btn-split-confirm">✓ Confirm Split</button>
     </div>
-    <button class="gbtn sec" id="btn-split-close">✕ Cancel</button>
+    <div class="stat-chip" id="chip-food">
+      <span class="sc-icon">🌾</span>
+      <div class="sc-body">
+        <span class="sc-val" id="v-food">80</span>
+        <div class="sc-bar"><div class="sc-fill" id="bar-food"></div></div>
+      </div>
+    </div>
+    <div class="stat-chip" id="chip-army">
+      <span class="sc-icon">⚔</span>
+      <div class="sc-body">
+        <span class="sc-val" id="v-army">20</span>
+        <div class="sc-bar"><div class="sc-fill" id="bar-army"></div></div>
+      </div>
+    </div>
+    <div class="stat-chip" id="chip-happy">
+      <span class="sc-icon">❤</span>
+      <div class="sc-body">
+        <span class="sc-val" id="v-happy">75</span>
+        <div class="sc-bar"><div class="sc-fill" id="bar-happy"></div></div>
+      </div>
+    </div>
+    <div class="stat-chip" id="chip-pop">
+      <span class="sc-icon">👥</span>
+      <div class="sc-body">
+        <span class="sc-val" id="v-pop">50</span>
+        <div class="sc-bar"><div class="sc-fill" id="bar-pop"></div></div>
+      </div>
+    </div>
+    <button id="btn-pause" class="icon-btn">⏸</button>
   </div>
 
-  <!-- GAME MENU -->
-  <div id="game-menu" class="overlay hidden">
-    <div class="ov-hdr">☰ Menu</div>
-    <button class="gbtn mitem" id="btn-save2">💾 Save Game</button>
-    <button class="gbtn mitem" id="btn-home">🏠 Home Screen</button>
-    <button class="gbtn sec mitem" id="btn-menu-close">✕ Close</button>
+  <!-- Progress bar -->
+  <div id="progress-bar">
+    <div id="progress-fill"></div>
+    <span id="progress-label">Spring · Year 1 of 3</span>
   </div>
 
-  <!-- Toast -->
+  <!-- Event panel (heart of the game) -->
+  <div id="event-panel" class="hidden">
+    <div id="ep-season-tag"></div>
+    <div id="ep-icon"></div>
+    <h2 id="ep-title"></h2>
+    <p id="ep-body"></p>
+    <div id="ep-effect" class="hidden"></div>
+    <div id="ep-choices"></div>
+    <div id="ep-skip" class="hidden">
+      <button id="btn-skip" class="hbtn secondary small">→ Continue to next event</button>
+    </div>
+  </div>
+
+  <!-- Outcome panel -->
+  <div id="outcome-panel" class="hidden">
+    <div id="op-icon"></div>
+    <h2 id="op-title"></h2>
+    <p id="op-body"></p>
+    <div id="op-effects"></div>
+    <button id="btn-next-event" class="hbtn primary">Continue →</button>
+  </div>
+
+  <!-- Kingdom stats sidebar -->
+  <div id="sidebar">
+    <div id="sb-title">Your Realm</div>
+    <div id="sb-kingdom-name"></div>
+    <div id="sb-buildings"></div>
+    <div id="sb-score-row">
+      <span>Legacy Score</span>
+      <span id="sb-score">0</span>
+    </div>
+    <div id="sb-achievements">
+      <div class="sb-hdr">Achievements</div>
+      <div id="ach-list"></div>
+    </div>
+    <button id="btn-menu" class="hbtn secondary small">☰ Menu</button>
+  </div>
+
+  <!-- Notification toast -->
   <div id="toast" class="hidden"></div>
 
-  <!-- Battle log -->
-  <div id="battle-log">
-    <div id="battle-log-inner"></div>
+  <!-- Streak notification -->
+  <div id="streak-banner" class="hidden">
+    <span>🔥</span><span id="streak-banner-text">Day streak!</span>
   </div>
 
-</div><!-- #hud -->
+  <!-- Achievement popup -->
+  <div id="ach-popup" class="hidden">
+    <span id="ach-popup-icon">🏆</span>
+    <div>
+      <div id="ach-popup-name"></div>
+      <div id="ach-popup-desc"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════ GAME OVER ═══════════════════════ -->
+<div id="gameover" class="hidden">
+  <div id="go-card">
+    <div id="go-icon">💀</div>
+    <h2 id="go-title">Your Kingdom Has Fallen</h2>
+    <p id="go-reason" id="go-reason"></p>
+    <div id="go-stats"></div>
+    <div id="go-score-big"></div>
+    <button id="btn-go-home" class="hbtn primary">Try Again</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════ VICTORY ═══════════════════════ -->
+<div id="victory" class="hidden">
+  <div id="vic-card">
+    <div id="vic-icon">👑</div>
+    <h2 id="vic-title">A Legendary Reign!</h2>
+    <p id="vic-body"></p>
+    <div id="vic-score-big"></div>
+    <div id="vic-stats"></div>
+    <button id="btn-vic-home" class="hbtn primary">Play Again</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════ PAUSE / MENU ═══════════════════════ -->
+<div id="pause-menu" class="hidden">
+  <div id="pm-card">
+    <h2>⏸ Paused</h2>
+    <p id="pm-kingdom"></p>
+    <button class="hbtn primary" id="btn-resume">▶ Resume</button>
+    <button class="hbtn secondary" id="btn-save-manual">💾 Save</button>
+    <button class="hbtn secondary" id="btn-abandon">💀 Abandon Kingdom</button>
+    <button class="hbtn secondary" id="btn-pm-home">🏠 Home</button>
+  </div>
+</div>
 
 <script src="game.js"></script>
 </body>
