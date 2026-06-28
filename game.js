@@ -1,4 +1,3 @@
-cat > /mnt/user-data/outputs/game.js << 'JSEOF'
 /**
  * TINY KINGDOM — game.js
  * The most addictive browser strategy game possible.
