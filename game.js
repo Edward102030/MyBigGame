@@ -1029,9 +1029,13 @@ const Save={
       const raw=localStorage.getItem(SAVE_KEY)||window.SHORTCUTS_SAVE;
       if(!raw)return false;
       const d=JSON.parse(raw);
+      if(!d||typeof d.day!=="number"||d.day>=TOTAL_DAYS||d.day<1){
+        localStorage.removeItem(SAVE_KEY);
+        return false;
+      }
       Object.assign(G,d);
       return true;
-    }catch(e){return false;}
+    }catch(e){localStorage.removeItem(SAVE_KEY);return false;}
   },
   getMeta(){
     try{return JSON.parse(localStorage.getItem(META_KEY))||{};}
@@ -1342,4 +1346,247 @@ function endGame(reason,msg){
   document.getElementById('go-reason').textContent=msg;
   document.getElementById('go-score-big').textContent=`Legacy Score: ${G.score}`;
   document.getElementById('go-stats').innerHTML=
-    `<div class="go-stat"><span>Reign Length</span><span>Day ${G.day}</span></div
+    `<div class="go-stat"><span>Reign Length</span><span>Day ${G.day}</span></div>`;
+  document.getElementById('go-stats').innerHTML+=
+    `<div class="go-stat"><span>Gold</span><span>${G.gold}</span></div>
+     <div class="go-stat"><span>Population</span><span>${G.pop}</span></div>
+     <div class="go-stat"><span>Buildings</span><span>${G.buildings.length}</span></div>
+     <div class="go-stat"><span>Achievements</span><span>${G.achievements.length}/${ACHIEVEMENTS.length}</span></div>`;
+
+  const meta=Save.getMeta();
+  const best=Math.max(meta.best_score||0,G.score);
+  if(G.score>=best){
+    document.getElementById('go-title').textContent='A Valiant Attempt — New Record!';
+  }
+}
+
+function showVictory(){
+  G.score=calcScore();
+  G.total_runs++;
+  const ach=ACHIEVEMENTS.find(a=>a.id==='first_win');
+  if(ach&&!G.achievements.includes(ach.id)){G.achievements.push(ach.id);}
+  Save.save();Save.clear();
+
+  document.getElementById('game').classList.add('hidden');
+  const screen=document.getElementById('victory');
+  screen.classList.remove('hidden');
+
+  const title=G.score>600?'A Legendary Reign!':G.score>400?'A Great Ruler':'A Worthy Ruler';
+  document.getElementById('vic-title').textContent=title;
+  document.getElementById('vic-body').textContent=
+    `${G.name} will be remembered for generations. Historians debate the secrets of your success. The people built statues in your honour.`;
+  document.getElementById('vic-score-big').textContent=`Legacy Score: ${G.score}`;
+  document.getElementById('vic-stats').innerHTML=
+    `<div class="go-stat"><span>Reign</span><span>${TOTAL_DAYS} days — COMPLETE</span></div>
+     <div class="go-stat"><span>Final Gold</span><span>${G.gold}</span></div>
+     <div class="go-stat"><span>Final Population</span><span>${G.pop}</span></div>
+     <div class="go-stat"><span>Buildings</span><span>${G.buildings.length}</span></div>
+     <div class="go-stat"><span>Achievements</span><span>${G.achievements.length}/${ACHIEVEMENTS.length}</span></div>`;
+}
+
+/* ══════════════════════════════════════════════
+   TOAST
+══════════════════════════════════════════════ */
+let _toastTimer=null;
+function toast(msg,dur){
+  dur=dur||2500;
+  const el=document.getElementById('toast');
+  if(!el)return;
+  el.textContent=msg;el.classList.remove('hidden');
+  clearTimeout(_toastTimer);
+  _toastTimer=setTimeout(()=>el.classList.add('hidden'),dur);
+}
+
+/* ══════════════════════════════════════════════
+   STREAK SYSTEM
+══════════════════════════════════════════════ */
+function checkStreak(){
+  const meta=Save.getMeta();
+  const today=new Date().toDateString();
+  const last=meta.last_played;
+  const yesterday=new Date(Date.now()-86400000).toDateString();
+  if(last===today){
+    G.streak=meta.streak||1;
+  }else if(last===yesterday){
+    G.streak=(meta.streak||0)+1;
+    if(G.streak>=2)showStreakBanner(G.streak);
+  }else{
+    G.streak=1;
+  }
+}
+
+function showStreakBanner(n){
+  const el=document.getElementById('streak-banner');
+  if(!el)return;
+  document.getElementById('streak-banner-text').textContent=`${n} day streak! +10 Gold bonus`;
+  el.classList.remove('hidden');
+  G.gold+=10;
+  setTimeout(()=>el.classList.add('hidden'),3000);
+}
+
+/* ══════════════════════════════════════════════
+   MAIN CONTROLLER
+══════════════════════════════════════════════ */
+function startNewGame(){
+  // Always clear any old save first
+  Save.clear();
+  const meta=Save.getMeta();
+
+  Object.assign(G,{
+    gold:100,food:80,army:20,happy:75,pop:50,
+    day:1,score:0,
+    name:KINGDOM_NAMES[Math.floor(Math.random()*KINGDOM_NAMES.length)]+' '+
+         ['Kingdom','Empire','Realm','Dominion','Crown'][Math.floor(Math.random()*5)],
+    buildings:[],achievements:[],events_seen:[],
+    pending_event:null,history:[],
+    streak:meta.streak||0,
+    total_runs:meta.total_runs||0,
+    all_achievements:meta.all_achievements||[],
+  });
+
+  document.getElementById('home').classList.add('hidden');
+  document.getElementById('gameover').classList.add('hidden');
+  document.getElementById('victory').classList.add('hidden');
+  document.getElementById('game').classList.remove('hidden');
+  HomeAnim.stop();
+
+  const kc=document.getElementById('kingdom-canvas');
+  KingdomCanvas.init(kc);
+
+  updateHUD();
+  Save.save();
+
+  setTimeout(()=>{
+    const ev=pickEvent();
+    if(ev)showEvent(ev);
+    else showRestDay();
+  },500);
+}
+
+function continueGame(){
+  if(!Save.load()){
+    toast('No saved kingdom found — start a New Kingdom!');
+    const b=document.getElementById('btn-new');
+    if(b){b.style.boxShadow='0 0 0 3px #f5c842';setTimeout(()=>b.style.boxShadow='',2200);}
+    return;
+  }
+  document.getElementById('home').classList.add('hidden');
+  document.getElementById('game').classList.remove('hidden');
+  HomeAnim.stop();
+
+  const kc=document.getElementById('kingdom-canvas');
+  KingdomCanvas.init(kc);
+
+  checkStreak();
+  updateHUD();
+
+  const ev=pickEvent();
+  if(ev)showEvent(ev);
+  else showRestDay();
+}
+
+function goHome(){
+  KingdomCanvas.stop();
+  document.getElementById('game').classList.add('hidden');
+  document.getElementById('gameover').classList.add('hidden');
+  document.getElementById('victory').classList.add('hidden');
+  document.getElementById('pause-menu').classList.add('hidden');
+  document.getElementById('home').classList.remove('hidden');
+  loadHomeScreen();
+  HomeAnim.init();
+}
+
+function loadHomeScreen(){
+  const meta=Save.getMeta();
+  // Only show Continue if there's a valid in-progress save
+  const raw=localStorage.getItem(SAVE_KEY);
+  let hasSave=false;
+  try{
+    const d=raw?JSON.parse(raw):null;
+    hasSave=!!(d&&d.day>=1&&d.day<TOTAL_DAYS);
+  }catch(e){}
+
+  if((meta.streak||0)>=2){
+    document.getElementById('home-streak').classList.remove('hidden');
+    document.getElementById('streak-text').textContent=`${meta.streak} day streak!`;
+  }
+  if((meta.total_runs||0)>0){
+    document.getElementById('home-records').classList.remove('hidden');
+    const rb=document.getElementById('rec-best');
+    const rr=document.getElementById('rec-runs');
+    if(rb)rb.textContent=meta.best_score||0;
+    if(rr)rr.textContent=meta.total_runs||0;
+  }
+  const cont=document.getElementById('btn-continue');
+  if(cont)cont.style.opacity=hasSave?'1':'0.4';
+}
+
+/* ══════════════════════════════════════════════
+   WIRE ALL BUTTONS
+══════════════════════════════════════════════ */
+function wireButtons(){
+  const on=(id,fn)=>{const el=document.getElementById(id);if(el)el.addEventListener('click',fn);};
+
+  on('btn-new',      startNewGame);
+  on('btn-continue', continueGame);
+  on('btn-next-event',advanceDay);
+  on('btn-skip',()=>{
+    document.getElementById('event-panel').classList.add('hidden');
+    advanceDay();
+  });
+  on('btn-pause',()=>{
+    document.getElementById('pause-menu').classList.remove('hidden');
+    const pk=document.getElementById('pm-kingdom');
+    if(pk)pk.textContent=G.name+' · Day '+G.day;
+  });
+  on('btn-resume',()=>document.getElementById('pause-menu').classList.add('hidden'));
+  on('btn-save-manual',()=>{Save.save();toast('💾 Kingdom saved!');});
+  on('btn-abandon',()=>{
+    if(confirm('Abandon this kingdom? Progress will be lost.')){
+      Save.clear();goHome();
+    }
+  });
+  on('btn-pm-home',()=>{Save.save();goHome();});
+  on('btn-menu',()=>{
+    document.getElementById('pause-menu').classList.remove('hidden');
+    const pk=document.getElementById('pm-kingdom');
+    if(pk)pk.textContent=G.name+' · Day '+G.day;
+  });
+  on('btn-go-home',  goHome);
+  on('btn-vic-home', goHome);
+}
+
+/* ══════════════════════════════════════════════
+   BOOT — always show home screen first
+══════════════════════════════════════════════ */
+function init(){
+  // Clear any completed or broken saves immediately on load
+  try{
+    const raw=localStorage.getItem(SAVE_KEY);
+    if(raw){
+      const d=JSON.parse(raw);
+      if(!d||typeof d.day!=='number'||d.day>=TOTAL_DAYS||d.day<1){
+        localStorage.removeItem(SAVE_KEY);
+      }
+    }
+  }catch(e){localStorage.removeItem(SAVE_KEY);}
+
+  wireButtons();
+  loadHomeScreen();
+  HomeAnim.init();
+
+  // Make sure all screens are in correct initial state
+  document.getElementById('game').classList.add('hidden');
+  document.getElementById('gameover').classList.add('hidden');
+  document.getElementById('victory').classList.add('hidden');
+  document.getElementById('pause-menu').classList.add('hidden');
+  document.getElementById('home').classList.remove('hidden');
+}
+
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded',init);
+}else{
+  init();
+}
+
+})();
