@@ -13,6 +13,31 @@
 (function(){
 'use strict';
 
+// ── NUCLEAR CLEAR: runs before ANYTHING else ──
+// Wipes every possible old save key from every version
+(function nuclearClear(){
+  try{
+    const allKeys=[];
+    for(let i=0;i<localStorage.length;i++) allKeys.push(localStorage.key(i));
+    allKeys.forEach(k=>{
+      if(!k) return;
+      // Delete any key that looks like a tinykingdom save
+      if(k.indexOf('tinykingdom')!==-1||k.indexOf('realm_')!==-1||k.indexOf('realm_save')!==-1){
+        // Only delete if it's a completed or broken game save
+        try{
+          const d=JSON.parse(localStorage.getItem(k));
+          if(d&&typeof d.day==='number'&&(d.day>=90||d.day<=0)){
+            localStorage.removeItem(k);
+          }
+        }catch(e){
+          // Couldn't parse — delete it
+          localStorage.removeItem(k);
+        }
+      }
+    });
+  }catch(e){}
+})();
+
 /* ══════════════════════════════════════════════
    CONSTANTS
 ══════════════════════════════════════════════ */
